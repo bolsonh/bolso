@@ -102,6 +102,32 @@
       (pl.source === 'definir' ? 'A renda que paga esta fatura está a definir; escolha em Mais, Cartões.' : 'Paga com ' + esc(B.srcName(pl.source)) + '.') + '</p>';
   }
 
+  /** Renda de onde sai o gasto (sem cartão de fatura): vem da regra pela data enquanto a pessoa não escolher outra. */
+  function syncSource(d) {
+    if (d.id || d.kind !== 'despesa' || d.sourceTouched || billedOf(d) || !d.date) return;
+    const inc = F.incomeForDate(S.data.recurring, d.date);
+    d.source = inc ? inc.key : 'definir';
+  }
+
+  /** Campo "Sai de" (entrada: "Esta entrada é do"), com a dica de por que veio preenchido. */
+  function srcField(d) {
+    if (billedOf(d)) return '';
+    const isIn = d.kind === 'receita';
+    let h = '<div class="field"><span>' + (isIn ? 'Esta entrada é do' : 'Sai de') + '</span>' +
+      seg('source', [['salario', 'Salário'], ['vale', 'Vale'], ['outra', 'Outra fonte']], d.source) + '</div>';
+    if (!isIn && !d.id) {
+      if (d.source === 'definir') {
+        h += '<p class="hint">Nenhuma renda cadastrada, então este gasto fica <b>A definir</b>. Cadastre suas rendas em Mais, Contas fixas (Entrada) ou escolha uma aqui.</p>';
+      } else if (!d.sourceTouched && d.date) {
+        const opts = F.incomeOptions(S.data.recurring);
+        h += '<p class="hint">' + (opts.length === 1
+          ? 'Sai do <b>' + esc(B.srcName(d.source)) + '</b>, a única renda cadastrada.'
+          : 'Pela data (' + dm(d.date) + '), sai do <b>' + esc(B.srcName(d.source)) + '</b>.') + ' Toque em outra para trocar.</p>';
+      }
+    }
+    return h;
+  }
+
   /** Aviso ao lançar com data antiga: se cair num mês de renda que já fechou, entra mesmo assim e fica com marca de ajuste. */
   function lateNote(d) {
     if (d.id || !d.date) return '';
@@ -121,6 +147,7 @@
 
   function txRender(d) {
     fixRepeat(d);
+    syncSource(d);
     const isIn = d.kind === 'receita';
     const edit = !!d.id;
     const m = F.parseMoney(d.amountText);
@@ -147,7 +174,7 @@
     h += '<div id="late-note">' + lateNote(d) + '</div>';
 
     const billed = !!billedOf(d);
-    if (!billed) h += '<div class="field"><span>' + (isIn ? 'Esta entrada é do' : 'Pago com o') + '</span>' + seg('source', [['salario', 'Salário'], ['vale', 'Vale'], ['outra', 'Outra fonte']], d.source) + '</div>';
+    h += '<div id="src-field">' + srcField(d) + '</div>';
 
     if (!edit) {
       const inst = d.repeat === 'installments';
@@ -205,7 +232,7 @@
     let changed = false;
     if (d.kind === 'despesa' && !d.category && prev.category) { d.category = prev.category; changed = true; }
     if (!d.cardTouched && d.kind === 'despesa' && d.card_id !== prev.card_id) { d.card_id = prev.card_id; changed = true; }
-    if (!d.sourceTouched && d.source !== prev.source) { d.source = prev.source; changed = true; }
+    if (d.kind === 'receita' && !d.sourceTouched && d.source !== prev.source) { d.source = prev.source; changed = true; } // gasto: a renda vem da data
     if (!F.parseMoney(d.amountText) > 0 && prev.amount > 0 && d.repeat !== 'installments') { d.amountText = F.fmtNum(prev.amount); changed = true; }
     return changed;
   }
@@ -222,7 +249,7 @@
       draft: d,
       render: () => txRender(d),
       field(name, v) {
-        if (name === 'kind') { d.kind = v; if (v === 'receita') { d.category = null; if (d.repeat === 'installments') d.repeat = 'once'; } return redraw(); }
+        if (name === 'kind') { d.kind = v; if (v === 'receita') { d.category = null; if (d.repeat === 'installments') d.repeat = 'once'; } if (!d.sourceTouched) d.source = 'salario'; return redraw(); }
         if (name === 'category') { d.category = v; return redraw(); }
         if (name === 'card_id') { d.card_id = v || null; d.cardTouched = true; return redraw(); }
         if (name === 'source') { d.source = v; d.sourceTouched = true; return redraw(); }
@@ -244,6 +271,9 @@
           if (cn) cn.innerHTML = cardNote(d);
           const ln = B.$('#late-note');
           if (ln) ln.innerHTML = lateNote(d);
+          syncSource(d);
+          const sf = B.$('#src-field');
+          if (sf) sf.innerHTML = srcField(d);
           if (rh && d.date) rh.textContent = 'Entra sozinha todo mês, no dia ' + F.dayOf(d.date) + ', como pendente. Para parar, pause em Mais, Contas fixas.';
         }
         if (name === 'n') d.n = el.value;
@@ -257,6 +287,7 @@
       },
       async submit() {
         fixRepeat(d);
+        syncSource(d);
         const amount = F.parseMoney(d.amountText);
         if (!(amount > 0)) return showErr('Digite um valor maior que zero.', '#f-amount');
         if (!d.date) return showErr('Escolha a data.', '#f-date');
@@ -285,7 +316,7 @@
           } else if (d.repeat === 'monthly') {
             const rec = {
               id: F.uid(), kind: d.kind, description, amount, day: F.dayOf(d.date), category: base.category, card_id: base.card_id,
-              source: place ? (place.source === 'definir' ? 'outra' : place.source) : d.source, month_offset: d.kind === 'receita' && d.nextMonth ? 1 : 0, start_month: month, active: true,
+              source: (place ? place.source : d.source) === 'definir' ? 'outra' : (place ? place.source : d.source), month_offset: d.kind === 'receita' && d.nextMonth ? 1 : 0, start_month: month, active: true,
             };
             await B.addRecurring(rec, Object.assign({ id: F.uid(), group_id: null, installment_no: null, installments_total: null }, base));
           } else {

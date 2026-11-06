@@ -72,6 +72,36 @@
   const paidDefault = (d) => d.date <= B.today();
   const isPaid = (d) => (d.paidTouched || d.id ? d.paid : paidDefault(d));
 
+  const dm = (dateStr) => F.pad(F.dayOf(dateStr)) + '/' + dateStr.slice(5, 7);
+  const cardOf = (d) => (d.kind === 'despesa' && d.card_id ? B.card(d.card_id) : null);
+  /** Cartão de crédito com fechamento e vencimento: a compra vai para a fatura e não pergunta salário ou vale. */
+  const billedOf = (d) => { const c = cardOf(d); return F.isBilled(c) ? c : null; };
+
+  /** Onde a compra cai: mês da fatura, renda e situação. Ao editar, só muda o que mudou de verdade. */
+  function billedPlace(d, card) {
+    const pl = F.placeOnInvoice(card, d.date, S.data.transactions, B.today(), d.id);
+    const prev = d.id ? B.findTx(d.id) : null;
+    if (!prev) return pl;
+    const sameCard = prev.card_id === d.card_id;
+    const month = prev.recurring_id ? prev.month : pl.month; // conta fixa mantém o mês (é a chave dela)
+    const sameInvoice = sameCard && prev.month === month;
+    // na mesma fatura nada muda; ao trocar de fatura vale a situação dela, mas o que já estava pago continua pago
+    const paid = sameInvoice ? prev.paid : sameCard ? prev.paid || pl.paid : pl.paid;
+    return Object.assign({}, pl, { month, source: sameInvoice ? prev.source : pl.source, paid });
+  }
+
+  function cardNote(d) {
+    const c = cardOf(d);
+    if (!c || c.kind !== 'credito') return '';
+    if (!F.isBilled(c)) {
+      return '<p class="hint">Este cartão ainda não tem fechamento e vencimento, então o Bolso não sabe em qual fatura a compra cai. <button type="button" class="link-btn" data-f="cfg-card">Informar agora</button></p>';
+    }
+    if (!d.date) return '';
+    const pl = billedPlace(d, c);
+    return '<p class="hint">Cai na fatura de <b>' + esc(F.monthName(pl.month).toLowerCase()) + '</b>: fecha em ' + dm(F.invoiceDates(c, pl.month).closeDate) + ' e vence em ' + dm(F.invoiceDates(c, pl.month).dueDate) + '. ' +
+      (pl.source === 'definir' ? 'A renda que paga esta fatura está a definir; escolha em Mais, Cartões.' : 'Paga com ' + esc(B.srcName(pl.source)) + '.') + '</p>';
+  }
+
   function txRender(d) {
     const isIn = d.kind === 'receita';
     const edit = !!d.id;
@@ -93,10 +123,12 @@
       h += '<div class="field"><span>Cartão</span><div class="opts row">' +
         '<button type="button" class="opt" aria-pressed="' + (!d.card_id) + '" data-f="card_id" data-v=""><i class="dot" style="--c:var(--muted)"></i>' + F.CASH_NAME + '</button>' +
         S.data.cards.map((c) => '<button type="button" class="opt" aria-pressed="' + (d.card_id === c.id) + '" data-f="card_id" data-v="' + c.id + '"><i class="dot" style="--c:' + esc(c.color) + '"></i>' + esc(c.name) + '</button>').join('') +
-        '<button type="button" class="opt add" data-f="new-card">+ Novo cartão</button></div></div>';
+        '<button type="button" class="opt add" data-f="new-card">+ Novo cartão</button></div></div>' +
+        '<div id="card-note">' + cardNote(d) + '</div>';
     }
 
-    h += '<div class="field"><span>' + (isIn ? 'Esta entrada é do' : 'Pago com o') + '</span>' + seg('source', [['salario', 'Salário'], ['vale', 'Vale'], ['outra', 'Outra fonte']], d.source) + '</div>';
+    const billed = !!billedOf(d);
+    if (!billed) h += '<div class="field"><span>' + (isIn ? 'Esta entrada é do' : 'Pago com o') + '</span>' + seg('source', [['salario', 'Salário'], ['vale', 'Vale'], ['outra', 'Outra fonte']], d.source) + '</div>';
 
     if (!edit) {
       h += '<div class="field"><span>Repetição</span>' + seg('repeat', isIn ? [['once', 'Só esta vez'], ['monthly', 'Todo mês']] : [['once', 'Só esta vez'], ['monthly', 'Todo mês'], ['installments', 'Parcelado']], d.repeat) + '</div>';
@@ -110,7 +142,7 @@
     if (isIn) {
       h += '<label class="check-row"><input type="checkbox" data-in="next"' + (d.nextMonth ? ' checked' : '') + '><span>Cai no fim do mês e vale para o <b>mês seguinte</b></span></label>';
     }
-    if (d.repeat !== 'installments' || edit) {
+    if ((d.repeat !== 'installments' || edit) && !billed) {
       h += '<label class="check-row"><input type="checkbox" data-in="paid"' + (isPaid(d) ? ' checked' : '') + '><span>' + (isIn ? 'Já recebi' : 'Já paguei') + '</span></label>';
     }
 
@@ -149,7 +181,11 @@
     return changed;
   }
 
-  function txMonth(d) { return d.kind === 'receita' && d.nextMonth ? F.addMonths(F.monthOf(d.date), 1) : F.monthOf(d.date); }
+  function txMonth(d) {
+    const c = billedOf(d);
+    if (c) return billedPlace(d, c).month;
+    return d.kind === 'receita' && d.nextMonth ? F.addMonths(F.monthOf(d.date), 1) : F.monthOf(d.date);
+  }
 
   function openTxSheet(kind, base) {
     const d = newTxDraft(kind, base);
@@ -163,6 +199,7 @@
         if (name === 'source') { d.source = v; d.sourceTouched = true; return redraw(); }
         if (name === 'repeat') { d.repeat = v; return redraw(); }
         if (name === 'new-card') return openCardSheet(null, d);
+        if (name === 'cfg-card') return openCardSheet(d.card_id, d);
         if (name === 'new-cat') return openCategorySheet(d);
       },
       input(name, el) {
@@ -173,6 +210,8 @@
           const cb = B.$('[data-in="paid"]');
           if (cb && !d.paidTouched && !d.id) cb.checked = paidDefault(d);
           const rh = B.$('#rep-hint');
+          const cn = B.$('#card-note');
+          if (cn) cn.innerHTML = cardNote(d);
           if (rh && d.date) rh.textContent = 'Entra sozinha todo mês, no dia ' + F.dayOf(d.date) + ', como pendente. Para parar, pause em Mais, Contas fixas.';
         }
         if (name === 'n') d.n = el.value;
@@ -197,21 +236,23 @@
         const description = d.description.trim() || (d.kind === 'despesa' ? B.catName(d.category) : B.srcName(d.source));
         const btn = B.$('#f-save');
         btn.disabled = true;
-        const month = txMonth(d);
+        const card = billedOf(d);
+        const place = card ? billedPlace(d, card) : null;
+        const month = place ? place.month : txMonth(d);
         const ok = await B.guard(async () => {
           const base = {
             kind: d.kind, description, amount, date: d.date, month,
             category: d.kind === 'despesa' ? d.category : null, card_id: d.kind === 'despesa' ? d.card_id : null,
-            source: d.source, paid: isPaid(d), skipped: d.skipped,
+            source: place ? place.source : d.source, paid: place ? place.paid : isPaid(d), skipped: d.skipped,
           };
           if (d.id) {
             await B.updTx(d.id, base);
           } else if (d.repeat === 'installments') {
-            await B.addTxs(F.buildInstallments({ description, totalAmount: amount, n, firstDate: d.date, category: d.category, card_id: d.card_id, source: d.source, today: B.today() }));
+            await B.addTxs(F.buildInstallments({ description, totalAmount: amount, n, firstDate: d.date, category: d.category, card_id: d.card_id, card, txs: S.data.transactions, source: d.source, today: B.today() }));
           } else if (d.repeat === 'monthly') {
             const rec = {
               id: F.uid(), kind: d.kind, description, amount, day: F.dayOf(d.date), category: base.category, card_id: base.card_id,
-              source: d.source, month_offset: d.kind === 'receita' && d.nextMonth ? 1 : 0, start_month: month, active: true,
+              source: place ? (place.source === 'definir' ? 'outra' : place.source) : d.source, month_offset: d.kind === 'receita' && d.nextMonth ? 1 : 0, start_month: month, active: true,
             };
             await B.addRecurring(rec, Object.assign({ id: F.uid(), group_id: null, installment_no: null, installments_total: null }, base));
           } else {
@@ -224,7 +265,7 @@
         B.sheet.close();
         const moved = month !== S.month;
         if (moved) await B.setMonth(month); else B.render();
-        B.toast(d.id ? 'Alterações salvas.' : moved ? 'Salvo em ' + F.monthLabel(month) + '.' : 'Lançamento salvo.');
+        B.toast(d.id ? 'Alterações salvas.' : card ? 'Salvo na fatura de ' + F.monthName(month).toLowerCase() + '.' : moved ? 'Salvo em ' + F.monthLabel(month) + '.' : 'Lançamento salvo.');
       },
       async remove() {
         const t = B.findTx(d.id);
@@ -271,24 +312,103 @@
 
   const CARD_COLORS = ['#2a78d6', '#6250d6', '#e87ba4', '#e34948', '#eb6834', '#eda100', '#1baf7a', '#008300', '#52514e', '#0b0b0b'];
 
+  /** Rendas que podem pagar a fatura: só as já cadastradas como entrada fixa. A atual do cartão sempre aparece. */
+  function payChoice(d, current) {
+    const opts = F.incomeOptions(S.data.recurring);
+    if (current && !opts.some((o) => o.key === current)) opts.push({ key: current, name: B.srcName(current), day: null });
+    const due = F.dayInt(d.due);
+    const sug = due ? F.suggestPaySource(S.data.recurring, due) : null;
+    let value = null;
+    if (opts.length === 1) value = opts[0].key;
+    else if (opts.length > 1) value = d.payTouched && opts.some((o) => o.key === d.pay) ? d.pay : (sug && opts.some((o) => o.key === sug.key) ? sug.key : opts[0].key);
+    return { opts, sug, value, due };
+  }
+
+  function payBlock(d, current) {
+    const { opts, sug, value, due } = payChoice(d, current);
+    let h = '<span>Paga com qual renda?</span>';
+    if (!opts.length) {
+      h += '<p class="callout">A definir. Cadastre o seu salário e o seu vale em Mais, Contas fixas (como entrada) e volte aqui para escolher. Até lá, as compras deste cartão ficam como "A definir".</p>';
+    } else if (opts.length === 1) {
+      h += '<p class="muted-text">' + esc(opts[0].name) + ', a sua única renda cadastrada.</p>';
+    } else {
+      h += seg('pay', opts.map((o) => [o.key, o.name]), value);
+      if (sug) {
+        const name = esc(B.srcName(sug.key));
+        h += '<p class="hint">Sugestão: ' + name + ', que cai no dia ' + sug.day + (sug.day <= due ? ', até o vencimento (dia ' + due + ').' : ' do mês anterior ao vencimento (dia ' + due + ').') + '</p>';
+      } else {
+        h += '<p class="hint">Digite o dia do vencimento para ver a sugestão.</p>';
+      }
+    }
+    return h;
+  }
+
   function openCardSheet(id, returnToTx) {
     const ex = id ? S.data.cards.find((c) => c.id === id) : null;
-    const d = { name: ex ? ex.name : '', kind: ex ? ex.kind : 'credito', color: ex ? ex.color : CARD_COLORS[S.data.cards.length % CARD_COLORS.length] };
+    const d = {
+      name: ex ? ex.name : '', kind: ex ? ex.kind : 'credito', color: ex ? ex.color : CARD_COLORS[S.data.cards.length % CARD_COLORS.length],
+      close: ex && ex.closing_day ? String(ex.closing_day) : '', due: ex && ex.due_day ? String(ex.due_day) : '',
+      pay: ex ? ex.pay_source || null : null, payTouched: !!(ex && ex.pay_source),
+    };
+    const exPay = ex ? ex.pay_source || null : null;
     const back = () => { if (returnToTx) { cur = null; openTxFromDraft(returnToTx); } else B.sheet.close(); };
     const ctrl = {
       draft: d,
       render: () => '<form id="card-form" novalidate autocomplete="off">' + head(ex ? 'Editar cartão' : 'Novo cartão') +
         '<label class="field"><span>Nome</span><input id="f-name" data-in="name" maxlength="30" placeholder="Ex.: Nubank, Itaú, Débito Caixa" value="' + esc(d.name) + '"></label>' +
         '<div class="field"><span>Tipo</span>' + seg('kind', [['credito', 'Crédito'], ['debito', 'Débito']], d.kind) + '</div>' +
+        (d.kind === 'credito'
+          ? '<div class="two"><label class="field"><span>Fecha no dia</span><input id="f-close" data-in="close" type="number" inputmode="numeric" min="1" max="31" placeholder="Ex.: 11" value="' + esc(d.close) + '"></label>' +
+            '<label class="field"><span>Vence no dia</span><input id="f-due" data-in="due" type="number" inputmode="numeric" min="1" max="31" placeholder="Ex.: 15" value="' + esc(d.due) + '"></label></div>' +
+            '<p class="hint">Compra antes do dia do fechamento entra na fatura que fecha neste mês. No dia do fechamento ou depois, entra na do mês seguinte. Em mês curto vale o último dia.</p>' +
+            '<div class="field" id="pay-block">' + payBlock(d, exPay) + '</div>'
+          : '') +
         '<div class="field"><span>Cor</span><div class="swatches">' + CARD_COLORS.map((c) => '<button type="button" class="sw" aria-label="Cor ' + c + '" aria-pressed="' + (d.color === c) + '" data-f="color" data-v="' + c + '" style="--c:' + c + '"></button>').join('') + '</div></div>' +
         '<p class="form-err" id="f-err" role="alert"></p><div class="sheet-actions"><button type="submit" class="btn primary" id="f-save">Salvar</button>' +
         (ex ? '<button type="button" class="btn danger-text" data-del>Excluir cartão</button>' : '') + '</div></form>',
-      field(name, v) { d[name] = v; redraw(); },
-      input(name, el) { if (name === 'name') d.name = el.value; },
+      field(name, v) {
+        if (name === 'pay') { d.pay = v; d.payTouched = true; } else d[name] = v;
+        redraw();
+      },
+      input(name, el) {
+        if (name === 'name') d.name = el.value;
+        if (name === 'close') d.close = el.value;
+        if (name === 'due') { d.due = el.value; const pb = B.$('#pay-block'); if (pb) pb.innerHTML = payBlock(d, exPay); }
+      },
       async submit() {
         const name = d.name.trim();
         if (!name) return showErr('Dê um nome ao cartão.', '#f-name');
-        const row = await B.guard(async () => (ex ? (await B.updCard(ex.id, { name, kind: d.kind, color: d.color }), ex) : B.addCard({ id: F.uid(), name, kind: d.kind, color: d.color })));
+        const patch = { name, kind: d.kind, color: d.color };
+        if (d.kind === 'credito') {
+          const c = F.dayInt(d.close), v = F.dayInt(d.due);
+          const mustHave = !ex || F.isBilled(ex) || d.close !== '' || d.due !== '';
+          if (mustHave && !c) return showErr('Digite o dia do fechamento, de 1 a 31.', '#f-close');
+          if (mustHave && !v) return showErr('Digite o dia do vencimento, de 1 a 31.', '#f-due');
+          if (c && v) Object.assign(patch, { closing_day: c, due_day: v, pay_source: payChoice(d, exPay).value });
+        } else if (ex && (ex.closing_day || ex.due_day || ex.pay_source)) {
+          Object.assign(patch, { closing_day: null, due_day: null, pay_source: null });
+        }
+        const next = Object.assign({}, ex || {}, patch, { id: ex ? ex.id : 'novo' });
+        const billChanged = F.isBilled(next) && (!ex || ex.closing_day !== next.closing_day || ex.due_day !== next.due_day || (ex.pay_source || null) !== (next.pay_source || null));
+        if (ex && billChanged) {
+          const plan = B.rebillPlan(next);
+          if (plan.count) {
+            const ok = await B.ask({
+              title: 'Refazer as faturas em aberto?',
+              text: plan.count + (plan.count === 1 ? ' compra ainda não paga' : ' compras ainda não pagas') + ' deste cartão ' + (plan.count === 1 ? 'vai' : 'vão') + ' para a fatura certa e sair da renda escolhida. O que já foi pago não muda.',
+              actions: [{ label: 'Salvar e refazer', value: true, kind: 'primary' }],
+            });
+            if (!ok) return;
+          }
+        }
+        const row = await B.guard(async () => {
+          if (ex) {
+            await B.updCard(ex.id, patch);
+            if (billChanged) await B.applyRebill(B.card(ex.id));
+            return ex;
+          }
+          return B.addCard(Object.assign({ id: F.uid() }, patch));
+        });
         if (!row) return;
         if (returnToTx) { returnToTx.card_id = row.id; returnToTx.cardTouched = true; back(); }
         else { B.sheet.close(); B.render(); B.toast('Cartão salvo.'); }
@@ -304,6 +424,46 @@
     open(ctrl, ex ? null : '#f-name');
   }
   B.openCardSheet = openCardSheet;
+
+  /* ---------- Fatura do cartão ---------- */
+
+  function openInvoiceSheet(cardId, month) {
+    const ctrl = {
+      draft: { cardId, month },
+      render() {
+        const card = B.card(cardId), inv = B.invoiceOf(cardId, month);
+        if (!card || !inv) return '<div>' + head('Fatura') + '<p class="muted-text">Esta fatura não tem mais compras.</p></div>';
+        const opts = F.incomeOptions(S.data.recurring);
+        if (inv.source && inv.source !== 'definir' && !opts.some((o) => o.key === inv.source)) opts.push({ key: inv.source, name: B.srcName(inv.source) });
+        let h = '<div>' + head('Fatura ' + esc(card.name));
+        h += '<p class="inv-total"><b class="num">' + F.fmtBRL(inv.total) + '</b><span>' + inv.count + (inv.count === 1 ? ' compra' : ' compras') + '</span></p>';
+        h += '<p class="muted-text inv-dates">Fecha em ' + dm(inv.closeDate) + '. Vence em ' + dm(inv.dueDate) + '/' + inv.dueDate.slice(0, 4) + '.</p>';
+        h += '<div class="field"><span>Paga com qual renda?</span>';
+        if (!opts.length) h += '<p class="callout">A definir. Cadastre o seu salário e o seu vale em Mais, Contas fixas (como entrada) para escolher aqui.</p>';
+        else {
+          h += seg('inv-src', opts.map((o) => [o.key, o.name]), inv.source);
+          if (!inv.source) h += '<p class="hint">As compras desta fatura estão com rendas diferentes. Escolha uma para igualar.</p>';
+          else if (inv.source === 'definir') h += '<p class="hint">Ainda está a definir. Escolha a renda que paga esta fatura.</p>';
+        }
+        h += '</div>';
+        h += '<div class="sheet-actions"><button type="button" class="btn ' + (inv.paid ? '' : 'primary') + '" data-f="inv-paid">' + (inv.paid ? 'Voltar para pendente' : 'Marcar fatura como paga') + '</button></div>';
+        h += '<h3 class="h-sub inv-h">Compras desta fatura</h3><div class="inv-list">' +
+          inv.items.slice().sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)).map((t) => B.V.invoiceItem(t)).join('') + '</div></div>';
+        return h;
+      },
+      async field(name, v) {
+        const ok = await B.guard(async () => {
+          if (name === 'inv-src') await B.setInvoiceSource(cardId, month, v);
+          if (name === 'inv-paid') { const inv = B.invoiceOf(cardId, month); await B.setInvoicePaid(cardId, month, !inv.paid); }
+          return true;
+        });
+        if (!ok) return;
+        redraw(); B.render();
+      },
+    };
+    open(ctrl);
+  }
+  B.openInvoiceSheet = openInvoiceSheet;
 
   /* Reabre o formulário de lançamento com o rascunho que já estava preenchido. */
   function openTxFromDraft(d) {
@@ -363,7 +523,9 @@
           h += '<div class="field"><span>Cartão</span><div class="opts row"><button type="button" class="opt" aria-pressed="' + (!d.card_id) + '" data-f="card_id" data-v=""><i class="dot" style="--c:var(--muted)"></i>' + F.CASH_NAME + '</button>' +
             S.data.cards.map((c) => '<button type="button" class="opt" aria-pressed="' + (d.card_id === c.id) + '" data-f="card_id" data-v="' + c.id + '"><i class="dot" style="--c:' + esc(c.color) + '"></i>' + esc(c.name) + '</button>').join('') + '</div></div>';
         }
-        h += '<div class="field"><span>' + (isIn ? 'Entrada do' : 'Pago com o') + '</span>' + seg('source', [['salario', 'Salário'], ['vale', 'Vale'], ['outra', 'Outra fonte']], d.source) + '</div>';
+        const billedRec = !isIn && F.isBilled(B.card(d.card_id));
+        if (billedRec) h += '<p class="hint">Entra na fatura do cartão, no dia ' + esc(d.day) + ' de cada mês. A renda que paga é a da fatura.</p>';
+        else h += '<div class="field"><span>' + (isIn ? 'Entrada do' : 'Pago com o') + '</span>' + seg('source', [['salario', 'Salário'], ['vale', 'Vale'], ['outra', 'Outra fonte']], d.source) + '</div>';
         if (isIn) h += '<label class="check-row"><input type="checkbox" data-in="next"' + (d.nextMonth ? ' checked' : '') + '><span>Cai no fim do mês e vale para o <b>mês seguinte</b></span></label>';
         if (ex) {
           h += '<label class="check-row"><input type="checkbox" data-in="active"' + (d.active ? ' checked' : '') + '><span>Ativa (desmarque para pausar)</span></label>' +
@@ -397,15 +559,18 @@
         if (!(amount > 0)) return showErr('Digite um valor maior que zero.', '#f-amount');
         if (!(day >= 1 && day <= 31)) return showErr('O dia deve ser de 1 a 31.', '#f-day');
         if (d.kind === 'despesa' && !d.category) return showErr('Escolha o nicho.');
+        const rcard = d.kind === 'despesa' && F.isBilled(B.card(d.card_id)) ? B.card(d.card_id) : null;
         const fields = {
           kind: d.kind, description: d.description.trim(), amount, day, category: d.kind === 'despesa' ? d.category : null,
-          card_id: d.kind === 'despesa' ? d.card_id : null, source: d.source, month_offset: d.kind === 'receita' && d.nextMonth ? 1 : 0,
+          card_id: d.kind === 'despesa' ? d.card_id : null, source: rcard ? (rcard.pay_source || 'outra') : d.source, month_offset: d.kind === 'receita' && d.nextMonth ? 1 : 0,
         };
+        // no cartão com fatura, start_month é o mês da fatura em que cai a cobrança deste mês
+        const startMonth = rcard ? F.invoiceOf(rcard, F.dateIn(B.curMonth(), day)).month : B.curMonth();
         const btn = B.$('#f-save');
         btn.disabled = true;
         const ok = await B.guard(async () => {
           if (ex) await B.updRecurring(ex.id, Object.assign(fields, { active: d.active }));
-          else await B.addRecurring(Object.assign({ id: F.uid(), start_month: B.curMonth(), active: true }, fields), null);
+          else await B.addRecurring(Object.assign({ id: F.uid(), start_month: startMonth, active: true }, fields), null);
           return true;
         });
         btn.disabled = false;
@@ -440,6 +605,7 @@
     await B.delCategory(c.id);
     B.render(); B.toast('Nicho apagado.');
   });
+  A['open-invoice'] = (el) => openInvoiceSheet(el.dataset.card, el.dataset.month);
   A['new-rec'] = () => openRecurringSheet(null);
   A['edit-rec'] = (el) => openRecurringSheet(el.dataset.id);
 })(window);

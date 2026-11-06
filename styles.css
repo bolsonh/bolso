@@ -18,6 +18,7 @@
   --src-salario: #2a78d6;
   --src-vale: #eb6834;
   --src-outra: #6b7d71;
+  --src-definir: #a07a1c;
   --critical: #c93434;
   --good: #17703f;
   --warn: #b8470f;
@@ -39,6 +40,7 @@
     --brand-mid: #145038;
     --src-salario: #3987e5;
     --src-vale: #d95926;
+    --src-definir: #d1a847;
     --critical: #f08080;
     --good: #52c78f;
     --warn: #ec835a;
@@ -412,3 +414,12 @@ a.list-item { text-decoration: none; color: inherit; }
 .doc-box h2 { margin-top: 0; }
 .doc-back { margin: 0 0 6px; }
 
+/* Cartão com fatura: fechamento e vencimento lado a lado, janela da fatura */
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.hint .link-btn { display: inline; padding: 0; min-height: 0; font-size: inherit; }
+.inv-total { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 0 0 4px; }
+.inv-total b { font-size: 30px; font-weight: 700; letter-spacing: -.01em; }
+.inv-total span { color: var(--ink2); font-size: 14px; }
+.inv-dates { margin: 0 0 16px; }
+.inv-h { margin: 18px 0 4px; }
+.inv-list .tx { cursor: pointer; }

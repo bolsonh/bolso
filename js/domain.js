@@ -235,6 +235,24 @@
     return { key: incomeKey(top.source), day: Number(top.day) };
   }
 
+  /** De qual renda sai um gasto sem cartão de fatura, pela data (#17): cada renda sustenta o período até a próxima chegar.
+      Vale a renda que chegou mais recentemente até aquele dia (no mês, ou no mês anterior se nenhuma chegou ainda).
+      Com uma renda só, ela sustenta o ciclo inteiro. Sem renda cadastrada devolve null (o gasto fica "a definir"). */
+  function incomeForDate(recurring, dateStr) {
+    const rows = (recurring || []).filter((r) => r.kind === 'receita' && r.active);
+    if (!rows.length || !dateStr) return null;
+    const m = monthOf(dateStr);
+    let best = null;
+    for (const mm of [m, addMonths(m, -1)]) {
+      for (const r of rows) {
+        const arrives = dateIn(mm, Number(r.day)); // mês curto: a renda do dia 30 cai no último dia
+        if (arrives <= dateStr && (!best || arrives > best.arrives)) best = { key: incomeKey(r.source), arrives };
+      }
+      if (best) break;
+    }
+    return best;
+  }
+
   function addDays(dateStr, n) {
     const p = dateStr.split('-').map(Number);
     const d = new Date(Date.UTC(p[0], p[1] - 1, p[2] + n));
@@ -657,7 +675,7 @@
     pad, todayStr, monthOf, dayOf, addMonths, monthDiff, daysInMonth, dateIn, rangeMonths,
     monthLabel, monthName, monthShort, dayLabel, uid,
     categoryInfo, instanceOf, missingRecurring, buildInstallments,
-    isBilled, invoiceOf, invoiceDates, placeOnInvoice, invoices, incomeOptions, suggestPaySource, chargeDate, dayInt,
+    isBilled, invoiceOf, invoiceDates, placeOnInvoice, invoices, incomeOptions, suggestPaySource, incomeForDate, chargeDate, dayInt,
     cycleOf, cycleDates, payDate, cycleView, cycleStatus, incomeSummary, dayNumber, stampDate, lateEntries,
     live, summarize, rankBy, byCategory, byCard, monthlySeries, spendingWhen, dowOf, buildInsights, toCSV,
   };

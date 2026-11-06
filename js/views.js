@@ -327,13 +327,14 @@
       item('mais/fixas', 'repeat', 'Contas fixas', S.data.recurring.filter((r) => r.active).length + ' ativas, voltam todo mês') +
       item('mais/cartoes', 'card', 'Cartões', S.data.cards.length ? S.data.cards.length + (S.data.cards.length === 1 ? ' cartão' : ' cartões') : 'Cadastre os cartões que você usa') +
       item('mais/nichos', 'tag', 'Nichos', F.CATEGORIES.length + ' padrão' + (S.data.categories.length ? ' e ' + S.data.categories.length + ' seus' : '')) +
-      item('mais/dados', 'data', 'Dados e backup', 'Exportar, importar e apagar') + '</div>';
+      item('mais/dados', 'data', 'Dados e backup', 'Exportar, importar e apagar') +
+      '<a class="list-item" href="privacidade.html" target="_blank" rel="noopener"><span class="ico">' + icon('info') + '</span><span class="li-text"><b>Privacidade e termos</b><small>Como tratamos os seus dados</small></span>' + icon('chev', 'end') + '</a></div>';
 
     html += '<section class="plain"><h2>Conta</h2>';
     if (local) {
       html += '<p class="callout">Modo local: seus dados ficam só neste aparelho. Para usar no celular e no computador com os mesmos dados, ligue o Supabase seguindo o guia que vem com o app.</p>';
     } else {
-      html += '<p class="muted-text">Conectado como <b>' + esc((S.user && S.user.email) || '') + '</b>. Os dados ficam no seu Supabase.</p><button type="button" class="btn" data-act="signout">Sair</button>';
+      html += '<p class="muted-text">Conectado como <b>' + esc((S.user && S.user.email) || '') + '</b>. Os dados ficam guardados na nuvem (Supabase), ligados a esse e-mail.</p><button type="button" class="btn" data-act="signout">Sair</button>';
     }
     html += '</section>';
 
@@ -388,6 +389,7 @@
       '<button type="button" class="btn" data-act="import-json">Restaurar de um backup</button>' +
       '<input type="file" id="file-backup" accept="application/json,.json" hidden></div>' +
       '<p class="muted-text">O backup serve também para levar os dados do modo local para o Supabase: entre no modo Supabase e use "Restaurar de um backup".</p>' +
+      '<p class="muted-text">Os seus direitos sobre os dados (baixar, corrigir e apagar) estão nesta tela. Para excluir também o seu login ou tirar dúvidas, veja a <a href="privacidade.html" target="_blank" rel="noopener">política de privacidade</a>.</p>' +
       '<section class="plain danger-zone"><h2>Apagar tudo</h2><p class="muted-text">Remove todos os lançamentos, cartões, contas fixas e nichos ' + (S.store.mode === 'local' ? 'deste aparelho' : 'da sua conta no Supabase') + '. Não tem como desfazer; baixe o backup antes.</p>' +
       '<button type="button" class="btn danger" data-act="wipe">Apagar todos os dados</button></section>';
     return html;

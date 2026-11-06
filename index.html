@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Bolso</title>
+  <meta name="description" content="Controle financeiro pessoal: cartões, nichos, contas fixas e salário x vale.">
+  <meta name="theme-color" content="#f9f9f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Bolso">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body data-state="loading">
+  <div class="app">
+    <aside class="side" id="side"></aside>
+    <main class="main" id="view" tabindex="-1"><p class="loading">Carregando</p></main>
+    <nav class="tabbar" id="tabbar" aria-label="Navegação principal"></nav>
+  </div>
+  <dialog id="sheet" aria-modal="true" aria-label="Formulário"></dialog>
+  <dialog id="ask" aria-modal="true" aria-label="Confirmação"></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite" popover="manual"></div>
+
+  <script src="config.js"></script>
+  <script src="js/domain.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/app-core.js"></script>
+  <script src="js/views.js"></script>
+  <script src="js/sheets.js"></script>
+  <script src="js/boot.js"></script>
+</body>
+</html>

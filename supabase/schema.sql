@@ -118,3 +118,24 @@ begin
       check (source in ('salario', 'vale', 'outra', 'definir'));
   end if;
 end $$;
+
+-- 8) Botão "Excluir minha conta" dentro do app (#23) --------------------
+-- Só acrescenta uma função. Apaga o login de quem está logado (auth.uid()); os dados dela somem em cascata.
+create or replace function public.excluir_minha_conta()
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  quem uuid := (select auth.uid());
+begin
+  if quem is null then
+    raise exception 'Entre na sua conta para poder excluí-la.' using errcode = '28000';
+  end if;
+  delete from auth.users where id = quem;
+end;
+$$;
+
+revoke all on function public.excluir_minha_conta() from public, anon;
+grant execute on function public.excluir_minha_conta() to authenticated;

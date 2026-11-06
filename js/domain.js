@@ -413,8 +413,10 @@
     return '﻿' + [head.map(q).join(';')].concat(rows).join('\r\n');
   }
 
+  const TERMS_VERSION = '2026-11-06'; // troque ao mudar a política ou os termos: todo mundo aceita de novo
+
   const Fin = {
-    CATEGORIES, SOURCES, CASH_NAME,
+    CATEGORIES, SOURCES, CASH_NAME, TERMS_VERSION,
     toCents, parseMoney, fmtBRL, fmtNum, fmtCompact, splitInstallments,
     pad, todayStr, monthOf, dayOf, addMonths, monthDiff, daysInMonth, dateIn, rangeMonths,
     monthLabel, monthName, monthShort, dayLabel, uid,

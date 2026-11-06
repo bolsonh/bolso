@@ -12,7 +12,9 @@
     route: 'resumo',
     sub: '',
     f: { kind: 'todos', card: '', cat: '', src: '', status: '', q: '' }, // filtros do Extrato
-    ana: { range: 1 },                                                    // período das Análises
+    // Análises: range = quantos meses; by = 'renda' (principal, mês de renda de 15 a 14) ou 'calendario' (apoio);
+    // cycle = mês de renda em foco (vazio = o de hoje); src = renda filtrada (vazio = somadas).
+    ana: { range: 1, by: 'renda', cycle: '', src: '' },
     user: null,
     installEvent: null,
   });
@@ -327,6 +329,17 @@
     if (ym < '2000-01') return;
     S.month = ym;
     await B.guard(() => B.ensureRecurring(ym));
+    B.render();
+  };
+
+  /** Mês de renda em foco nas Análises (o de hoje, se ninguém escolheu outro). */
+  B.anaCycle = () => S.ana.cycle || F.cycleOf(B.today());
+  B.setCycle = async (ym) => {
+    const top = F.addMonths(B.maxMonth(), -1); // o mês de renda M usa lançamentos de M e de M+1
+    if (ym > top) ym = top;
+    if (ym < '2000-01') return;
+    S.ana.cycle = ym === F.cycleOf(B.today()) ? '' : ym;
+    await B.guard(() => B.ensureRecurring(F.addMonths(ym, 1)));
     B.render();
   };
 

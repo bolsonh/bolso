@@ -103,6 +103,8 @@
       [/jwt expired|invalid jwt|refresh_token/i, 'Sua sessão expirou. Entre de novo.'],
       [/permission denied|row-level security|violates row-level/i, 'O banco recusou a gravação. Rode o arquivo schema.sql no Supabase e entre de novo.'],
       [/could not find the '[^']+' column|column .* does not exist|transactions_source_check/i, 'O banco ainda não tem a atualização da fatura do cartão. Rode o arquivo supabase/migracao-02-fatura.sql no SQL Editor do Supabase e tente de novo.'],
+      [/could not find the function|pgrst202|excluir_minha_conta/i, 'O banco ainda não tem a função de excluir conta. Rode o arquivo supabase/migracao-03-excluir-conta.sql no SQL Editor do Supabase e tente de novo.'],
+      [/entre na sua conta para poder/i, 'Sua sessão expirou. Entre de novo para excluir a conta.'],
       [/relation .* does not exist|could not find the table|schema cache/i, 'As tabelas ainda não existem no Supabase. Rode o arquivo schema.sql no SQL Editor.'],
       [/invalid api key|apikey/i, 'A chave do Supabase em config.js está errada.'],
     ];
@@ -198,6 +200,11 @@
         for (const t of ['transactions', 'recurring', 'categories', 'cards']) {
           ok(await client.from(t).delete().not('id', 'is', null));
         }
+      },
+      /** Exclui o login de quem está logado e todos os dados dele (a função do banco apaga em cascata). Depois sai só deste aparelho. */
+      async deleteAccount() {
+        ok(await client.rpc('excluir_minha_conta'));
+        try { await client.auth.signOut({ scope: 'local' }); } catch (e) { /* o login já foi apagado no servidor */ }
       },
       auth: {
         async getSession() {

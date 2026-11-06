@@ -11,7 +11,7 @@
     '<button type="button" aria-pressed="' + (value === v) + '" data-f="' + name + '" data-v="' + v + '">' + l + '</button>').join('') + '</div>';
 
   const head = (title) => '<div class="sheet-head"><h2 class="sheet-title">' + title + '</h2>' +
-    '<button type="button" class="icon-btn" data-close aria-label="Fechar"><svg class="ic" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>';
+    '<button type="button" class="icon-btn" data-close aria-label="Fechar"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>';
 
   function showErr(msg, focusSel) {
     const el = B.$('#f-err');

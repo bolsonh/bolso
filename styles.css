@@ -395,3 +395,20 @@ body:has(dialog[open]) { overflow: hidden; }
 .when-few { display: flex; align-items: flex-start; gap: 8px; margin: 6px 0 4px; font-size: 13px; color: var(--ink2); }
 .when-few .ic { flex: none; margin-top: 1px; }
 .when-note { margin: 8px 0 12px; font-size: 12px; color: var(--ink2); }
+
+/* ---------- Privacidade e aceite ---------- */
+.consent { display: flex; align-items: flex-start; gap: 12px; margin: 0 0 12px; font-size: 14px; color: var(--ink2); }
+.consent input { width: 22px; height: 22px; flex: none; margin-top: 1px; accent-color: var(--brand); }
+.consent a, .doc a { color: var(--brand); font-weight: 600; text-underline-offset: 3px; }
+a.list-item { text-decoration: none; color: inherit; }
+.doc { max-width: 720px; margin: 0 auto; padding: 28px 20px 64px; }
+.doc h1 { margin: 8px 0 6px; }
+.doc h2 { margin: 0 0 8px; font-size: 18px; }
+.doc section { margin: 26px 0 0; }
+.doc p, .doc li { line-height: 1.55; }
+.doc ul { padding-left: 20px; margin: 8px 0; }
+.doc li { margin: 6px 0; }
+.doc-box { padding: 16px 18px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow); }
+.doc-box h2 { margin-top: 0; }
+.doc-back { margin: 0 0 6px; }
+

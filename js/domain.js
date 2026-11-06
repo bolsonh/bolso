@@ -34,6 +34,7 @@
     { key: 'salario', name: 'Salário' },
     { key: 'vale', name: 'Vale' },
     { key: 'outra', name: 'Outra fonte' },
+    { key: 'definir', name: 'A definir' }, // fatura de cartão cuja renda ainda não foi escolhida
   ];
 
   const CASH_NAME = 'Dinheiro ou Pix';
@@ -138,29 +139,151 @@
     return CATEGORIES[CATEGORIES.length - 1];
   }
 
+  /* ---------- Cartão de crédito: fechamento, vencimento e fatura ---------- */
+
+  const dayInt = (v) => { const n = Number(v); return Number.isInteger(n) && n >= 1 && n <= 31 ? n : 0; };
+
+  /** Cartão de crédito com dia de fechamento e dia de vencimento informados. Os demais seguem como antes. */
+  function isBilled(card) {
+    return !!card && card.kind === 'credito' && dayInt(card.closing_day) > 0 && dayInt(card.due_day) > 0;
+  }
+
+  /** Em qual fatura cai uma compra feita em dateStr.
+      Compra antes do dia do fechamento entra na fatura que fecha neste mês; no dia do fechamento ou depois, na do mês seguinte.
+      Se o vencimento é maior que o fechamento, vence no mês do fechamento; senão, no mês seguinte.
+      Mês curto usa o último dia. A fatura é identificada pelo mês do vencimento (month). */
+  function invoiceOf(card, dateStr) {
+    const c = dayInt(card.closing_day), d = dayInt(card.due_day);
+    const ym = monthOf(dateStr);
+    const closeMonth = dayOf(dateStr) < Math.min(c, daysInMonth(ym)) ? ym : addMonths(ym, 1);
+    const month = d > c ? closeMonth : addMonths(closeMonth, 1);
+    return { month, closeMonth, closeDate: dateIn(closeMonth, c), dueDate: dateIn(month, d) };
+  }
+
+  /** Datas de fechamento e de vencimento da fatura que vence em month (AAAA-MM). */
+  function invoiceDates(card, month) {
+    const c = dayInt(card.closing_day), d = dayInt(card.due_day);
+    const closeMonth = d > c ? month : addMonths(month, -1);
+    return { closeDate: dateIn(closeMonth, c), dueDate: dateIn(month, d) };
+  }
+
+  /** Compras de uma fatura (cartão + mês do vencimento), sem as puladas. */
+  const invoiceTxs = (txs, cardId, month, exceptId) =>
+    txs.filter((t) => t.kind === 'despesa' && !t.skipped && t.card_id === cardId && t.month === month && t.id !== exceptId);
+
+  /** Onde uma compra no cartão cai: mês da fatura, de qual renda sai e se já está paga.
+      Se a fatura já existe, a compra acompanha a renda e a situação dela; senão usa a renda do cartão ("A definir" se não houver)
+      e conta como paga só se o vencimento já passou. */
+  function placeOnInvoice(card, dateStr, txs, today, exceptId) {
+    const inv = invoiceOf(card, dateStr);
+    const mates = invoiceTxs(txs, card.id, inv.month, exceptId);
+    const sources = new Set(mates.map((t) => t.source));
+    return {
+      month: inv.month, closeDate: inv.closeDate, dueDate: inv.dueDate, joins: mates.length,
+      source: sources.size === 1 ? [...sources][0] : (card.pay_source || 'definir'),
+      paid: mates.length ? mates.every((t) => t.paid) : inv.dueDate <= today,
+    };
+  }
+
+  /** Faturas (uma saída por cartão e mês de vencimento). Só cartões de crédito com fechamento e vencimento. */
+  function invoices(txs, cards) {
+    const byId = new Map(cards.map((c) => [c.id, c]));
+    const map = new Map();
+    for (const t of txs) {
+      if (t.kind !== 'despesa' || t.skipped || !t.card_id) continue;
+      const card = byId.get(t.card_id);
+      if (!isBilled(card)) continue;
+      const key = t.card_id + '|' + t.month;
+      let inv = map.get(key);
+      if (!inv) {
+        inv = Object.assign({ key, card_id: t.card_id, month: t.month, cents: 0, pendingCents: 0, count: 0, paidCount: 0, sources: new Set(), ids: [], items: [] }, invoiceDates(card, t.month));
+        map.set(key, inv);
+      }
+      const c = toCents(t.amount);
+      inv.cents += c; inv.count++; inv.ids.push(t.id); inv.items.push(t); inv.sources.add(t.source);
+      if (t.paid) inv.paidCount++; else inv.pendingCents += c;
+    }
+    return [...map.values()].map((inv) => Object.assign(inv, {
+      total: inv.cents / 100, pending: inv.pendingCents / 100, paid: inv.paidCount === inv.count,
+      source: inv.sources.size === 1 ? [...inv.sources][0] : null,
+    }));
+  }
+
+  const SOURCE_KEYS = ['salario', 'vale', 'outra'];
+  const incomeKey = (k) => (SOURCE_KEYS.includes(k) ? k : 'outra');
+
+  /** Rendas fixas cadastradas (entradas ativas), sem repetir a fonte: [{ key, name, day }]. */
+  function incomeOptions(recurring) {
+    const best = new Map();
+    for (const r of recurring) {
+      if (r.kind !== 'receita' || !r.active) continue;
+      const key = incomeKey(r.source);
+      const cur = best.get(key);
+      if (!cur || Number(r.day) < cur.day) best.set(key, { key, name: SOURCES.find((x) => x.key === key).name, day: Number(r.day) });
+    }
+    return SOURCE_KEYS.filter((k) => best.has(k)).map((k) => best.get(k));
+  }
+
+  /** Renda sugerida para pagar uma fatura: a que cai no dia do vencimento ou logo antes dele.
+      Se nenhuma cai antes (vencimento no começo do mês), vale a última que caiu no mês anterior. */
+  function suggestPaySource(recurring, dueDay) {
+    const rows = recurring.filter((r) => r.kind === 'receita' && r.active);
+    if (!rows.length) return null;
+    const before = rows.filter((r) => Number(r.day) <= dueDay);
+    const pool = before.length ? before : rows;
+    const top = pool.reduce((a, r) => (Number(r.day) > Number(a.day) ? r : a));
+    return { key: incomeKey(top.source), day: Number(top.day) };
+  }
+
+  function addDays(dateStr, n) {
+    const p = dateStr.split('-').map(Number);
+    const d = new Date(Date.UTC(p[0], p[1] - 1, p[2] + n));
+    return d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate());
+  }
+
+  /** Data de uma cobrança que se repete todo mês (dia day) dentro da fatura que vence em invMonth.
+      Se o dia não existe naquele ciclo (fechamento 31 em fevereiro, por exemplo), usa o último dia antes do fechamento. */
+  function chargeDate(card, invMonth, day) {
+    const { closeDate } = invoiceDates(card, invMonth);
+    const closeMonth = monthOf(closeDate);
+    const prev = dateIn(addMonths(closeMonth, -1), day), same = dateIn(closeMonth, day);
+    const order = day >= dayInt(card.closing_day) ? [prev, same] : [same, prev];
+    return order.find((x) => invoiceOf(card, x).month === invMonth) || addDays(closeDate, -1);
+  }
+
   /* ---------- Contas fixas ---------- */
 
-  function instanceOf(r, month) {
+  /** Lançamento de uma conta fixa. Em conta fixa no cartão de crédito com fatura, month é o mês da fatura (vencimento). */
+  function instanceOf(r, month, card, txs) {
+    const billed = r.kind === 'despesa' && isBilled(card);
     const base = addMonths(month, -(r.month_offset || 0));
+    let date = dateIn(base, r.day), source = r.source;
+    if (billed) {
+      date = chargeDate(card, month, r.day);
+      const mates = invoiceTxs(txs || [], card.id, month);
+      const sources = new Set(mates.map((t) => t.source));
+      source = sources.size === 1 ? [...sources][0] : (card.pay_source || 'definir');
+    }
     return {
       id: uid(), kind: r.kind, description: r.description, amount: r.amount,
-      date: dateIn(base, r.day), month, category: r.category || null, card_id: r.card_id || null,
-      source: r.source, paid: false, skipped: false,
+      date, month, category: r.category || null, card_id: r.card_id || null,
+      source, paid: false, skipped: false,
       recurring_id: r.id, group_id: null, installment_no: null, installments_total: null,
     };
   }
 
   /** Lançamentos que faltam criar para as contas fixas, de fromMonth até toMonth. */
-  function missingRecurring(recurring, txs, toMonth) {
+  function missingRecurring(recurring, txs, toMonth, cards) {
     const out = [];
     const active = recurring.filter((r) => r.active);
     if (!active.length) return out;
+    const byId = new Map((cards || []).map((c) => [c.id, c]));
     const have = new Set(txs.filter((t) => t.recurring_id).map((t) => t.recurring_id + '|' + t.month));
     for (const r of active) {
       let m = r.start_month;
       let guard = 0;
       while (m <= toMonth && guard++ < 240) {
-        if (!have.has(r.id + '|' + m)) out.push(instanceOf(r, m));
+        if (!have.has(r.id + '|' + m)) out.push(instanceOf(r, m, byId.get(r.card_id), txs));
         m = addMonths(m, 1);
       }
     }
@@ -174,13 +297,18 @@
     const group = uid();
     const startMonth = monthOf(o.firstDate);
     const day = dayOf(o.firstDate);
+    const billed = isBilled(o.card);
     return parts.map((c, i) => {
-      const month = addMonths(startMonth, i);
-      const date = dateIn(month, day);
+      const date = dateIn(addMonths(startMonth, i), day);
+      let month = monthOf(date), source = o.source, paid = date <= o.today;
+      if (billed) { // cartão com fatura: cada parcela cai na fatura da sua data
+        const pl = placeOnInvoice(o.card, date, o.txs || [], o.today);
+        month = pl.month; source = pl.source; paid = pl.paid;
+      }
       return {
         id: uid(), kind: 'despesa', description: o.description, amount: c / 100,
-        date, month, category: o.category || null, card_id: o.card_id || null, source: o.source,
-        paid: date <= o.today, skipped: false,
+        date, month, category: o.category || null, card_id: o.card_id || null, source,
+        paid, skipped: false,
         recurring_id: null, group_id: group, installment_no: i + 1, installments_total: o.n,
       };
     });
@@ -421,6 +549,7 @@
     pad, todayStr, monthOf, dayOf, addMonths, monthDiff, daysInMonth, dateIn, rangeMonths,
     monthLabel, monthName, monthShort, dayLabel, uid,
     categoryInfo, instanceOf, missingRecurring, buildInstallments,
+    isBilled, invoiceOf, invoiceDates, placeOnInvoice, invoices, incomeOptions, suggestPaySource, chargeDate, dayInt,
     live, summarize, rankBy, byCategory, byCard, monthlySeries, spendingWhen, dowOf, buildInsights, toCSV,
   };
 

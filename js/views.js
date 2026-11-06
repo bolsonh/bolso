@@ -554,9 +554,13 @@
       '<button type="button" class="btn" data-act="import-json">Restaurar de um backup</button>' +
       '<input type="file" id="file-backup" accept="application/json,.json" hidden></div>' +
       '<p class="muted-text">O backup serve também para levar os dados do modo local para o Supabase: entre no modo Supabase e use "Restaurar de um backup".</p>' +
-      '<p class="muted-text">Os seus direitos sobre os dados (baixar, corrigir e apagar) estão nesta tela. Para excluir também o seu login ou tirar dúvidas, veja a <a href="privacidade.html" target="_blank" rel="noopener">política de privacidade</a>.</p>' +
+      '<p class="muted-text">Os seus direitos sobre os dados (baixar, corrigir, apagar e excluir a conta) estão nesta tela. Para tirar dúvidas, veja a <a href="privacidade.html" target="_blank" rel="noopener">política de privacidade</a>.</p>' +
       '<section class="plain danger-zone"><h2>Apagar tudo</h2><p class="muted-text">Remove todos os lançamentos, cartões, contas fixas e nichos ' + (S.store.mode === 'local' ? 'deste aparelho' : 'da sua conta no Supabase') + '. Não tem como desfazer; baixe o backup antes.</p>' +
-      '<button type="button" class="btn danger" data-act="wipe">Apagar todos os dados</button></section>';
+      '<button type="button" class="btn danger" data-act="wipe">Apagar todos os dados</button></section>' +
+      // só existe conta no modo Supabase; no modo local os dados ficam no aparelho e "Apagar tudo" já resolve
+      (S.store.mode === 'local' ? '' :
+        '<section class="plain danger-zone"><h2>Excluir minha conta</h2><p class="muted-text">Apaga o seu login (e-mail e senha) e tudo o que está na sua conta: lançamentos, cartões, contas fixas e nichos. Não tem como desfazer; baixe o backup antes.</p>' +
+        '<button type="button" class="btn danger" data-act="delete-account">Excluir minha conta</button></section>');
     return html;
   };
 
@@ -641,6 +645,16 @@
     await B.reload();
     B.toast('Tudo apagado.');
     B.render();
+  });
+  A['delete-account'] = () => B.guard(async () => {
+    const ok = await B.ask({
+      title: 'Excluir a sua conta?',
+      text: 'Isso apaga o seu login e todos os seus dados do Bolso: lançamentos, cartões, contas fixas e nichos. Não tem volta. Se quiser guardar uma cópia, baixe o backup antes.',
+      confirmWord: 'EXCLUIR', actions: [{ label: 'Excluir minha conta', value: true, kind: 'danger' }],
+    });
+    if (!ok) return;
+    await S.store.deleteAccount();
+    B.toast('Conta excluída.');
   });
   A['install-app'] = () => B.guard(async () => {
     if (!S.installEvent) return;

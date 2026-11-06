@@ -33,10 +33,10 @@
     cards: ['id', 'name', 'kind', 'color', 'closing_day', 'due_day', 'pay_source'],
     categories: ['id', 'name', 'emoji'],
     recurring: ['id', 'kind', 'description', 'amount', 'day', 'category', 'card_id', 'source', 'month_offset', 'start_month', 'active'],
-    transactions: ['id', 'kind', 'description', 'amount', 'date', 'month', 'category', 'card_id', 'source', 'paid', 'skipped', 'recurring_id', 'group_id', 'installment_no', 'installments_total'],
+    transactions: ['id', 'kind', 'description', 'amount', 'date', 'month', 'category', 'card_id', 'source', 'paid', 'skipped', 'recurring_id', 'group_id', 'installment_no', 'installments_total', 'created_at'],
   };
   // Colunas novas (fatura do cartão): só seguem para o banco quando têm valor, assim cartões antigos gravam igual a antes.
-  const OPTIONAL = { cards: ['closing_day', 'due_day', 'pay_source'] };
+  const OPTIONAL = { cards: ['closing_day', 'due_day', 'pay_source'], transactions: ['created_at'] };
   const pick = (table, row) => {
     const o = {};
     for (const c of COLS[table]) {
@@ -139,10 +139,19 @@
 
   B.reload = async () => { S.data = await S.store.load(); };
 
+  /** Carimbo de lançamento para o que o sistema cria sozinho (conta fixa, backup): conta como lançado no próprio dia,
+      então nunca vira "ajuste" de mês fechado. Dia que ainda não chegou usa o momento de agora. */
+  B.stampOn = (dateStr) => {
+    const at = new Date(dateStr + 'T12:00:00'), now = new Date();
+    return (isNaN(at) || at > now ? now : at).toISOString();
+  };
+
   B.addTxs = async (rows) => {
     rows = rows.map((r) => pick('transactions', r));
     await S.store.insert('transactions', rows);
-    S.data.transactions.push(...rows);
+    // o banco carimba sozinho a hora do lançamento; aqui a tela fica com o mesmo carimbo sem precisar recarregar
+    const now = new Date().toISOString();
+    S.data.transactions.push(...rows.map((r) => (r.created_at ? r : Object.assign({}, r, { created_at: now }))));
   };
   B.updTx = async (id, patch) => {
     await S.store.update('transactions', id, patch);
@@ -246,7 +255,7 @@
     const target = through > B.maxMonth() ? B.maxMonth() : through;
     const miss = F.missingRecurring(S.data.recurring, S.data.transactions, target, S.data.cards);
     if (!miss.length) return 0;
-    const real = await S.store.insertIgnore('transactions', miss.map((r) => pick('transactions', r)));
+    const real = await S.store.insertIgnore('transactions', miss.map((r) => pick('transactions', Object.assign({}, r, { created_at: B.stampOn(r.date) }))));
     const key = (r) => r.recurring_id + '|' + r.month;
     const have = new Set(S.data.transactions.filter((t) => t.recurring_id).map(key));
     let n = 0;
@@ -305,6 +314,8 @@
       const have = new Set(S.data[t].map((r) => r.id));
       const rows = (Array.isArray(obj.data[t]) ? obj.data[t] : []).filter((r) => r && r.id && !have.has(r.id)).map((r) => pick(t, r));
       if (t === 'transactions' || t === 'recurring') for (const r of rows) r.amount = Number(r.amount) || 0;
+      // backup antigo não tinha a data de lançamento: restaurar não pode virar "ajuste" em tudo
+      if (t === 'transactions') for (const r of rows) if (!r.created_at && r.date) r.created_at = B.stampOn(r.date);
       if (rows.length) await S.store.insert(t, rows);
       added[t] = rows.length;
     }

@@ -281,7 +281,7 @@
   }
 
   /** Cabeçalho das Análises por renda: o mês de renda em foco, a navegação e o selo da medição. */
-  function cycleHead(endM, months, st) {
+  function cycleHead(endM, months, st, late) {
     const cur = F.cycleOf(B.today());
     const isCur = endM === cur;
     const top = F.addMonths(B.maxMonth(), -1);
@@ -289,15 +289,24 @@
     const cover = one
       ? 'Rendas recebidas em ' + F.monthName(endM).toLowerCase() + '. Cobre de ' + shortDate(st.start) + ' a ' + shortDate(st.end) + '.'
       : 'Rendas recebidas de ' + F.monthShort(months[0]) + ' a ' + F.monthShort(endM) + '. Cobre de ' + fullDate(st.start) + ' a ' + fullDate(st.end) + '.';
+    // Marca de ajuste: o mês fechou e depois entrou lançamento nele. Continua "fechado", só ganha a marca.
+    const adj = late && late.count
+      ? '<span class="seal adjust">' + icon('alert', 'xs') + 'Com ajuste</span>'
+      : '';
+    const adjNote = late && late.count
+      ? '<p class="adjust-note">' + (late.count === 1
+        ? 'O lançamento <b>' + esc(late.items[0].description) + '</b> (' + brl(late.items[0].amount) + ', de ' + shortDate(late.items[0].payDate) + ') entrou depois do fechamento e já está contado nos números.'
+        : late.count + ' lançamentos entraram depois do fechamento' + (late.spent > 0 ? ', somando ' + brl(late.spent) + ' em gastos' : '') + '. Já estão contados nos números.') + '</p>'
+      : '';
     const seal = st.closed
-      ? '<span class="seal closed">' + icon('check', 'xs') + 'Mês fechado</span><span class="seal-note">Fechou em ' + shortDate(st.end) + '.</span>'
+      ? '<span class="seal closed">' + icon('check', 'xs') + 'Mês fechado</span>' + adj + '<span class="seal-note">Fechou em ' + shortDate(st.end) + '.</span>'
       : '<span class="seal partial">' + icon('info', 'xs') + 'Medição parcial</span><span class="seal-note">' +
         (st.started ? 'Vai até ' + shortDate(st.end) + ' e ainda pode entrar gasto.' : 'Começa em ' + shortDate(st.start) + '.') + '</span>';
     return '<header class="head"><div class="head-title"><h1>' + F.monthName(endM) + ' <span class="yr">' + endM.slice(0, 4) + '</span></h1>' +
       (isCur ? '' : '<button type="button" class="link-btn" data-act="cycle-today">Ir para o mês de renda atual</button>') + '</div>' +
       '<div class="mnav"><button type="button" class="icon-btn" data-act="cycle-prev" aria-label="Mês de renda anterior">' + icon('left') + '</button>' +
       '<button type="button" class="icon-btn" data-act="cycle-next" aria-label="Próximo mês de renda"' + (endM >= top ? ' disabled' : '') + '>' + icon('right') + '</button></div></header>' +
-      '<p class="cycle-note">' + esc(cover) + '</p><div class="cycle-meta">' + seal + '</div>';
+      '<p class="cycle-note">' + esc(cover) + '</p><div class="cycle-meta">' + seal + '</div>' + adjNote;
   }
 
   V.analises = function () {
@@ -325,7 +334,7 @@
     const cards = F.byCard(T, months);
     const fixed = exp.filter((t) => t.recurring_id).reduce((s, t) => s + F.toCents(t.amount), 0) / 100;
 
-    let html = byRenda ? cycleHead(endM, months, st) : monthHead();
+    let html = byRenda ? cycleHead(endM, months, st, F.lateEntries(T, months)) : monthHead();
     html += anaSwitch();
     html += '<div class="seg" role="group" aria-label="Período">' +
       [[1, 'Mês'], [3, '3 meses'], [6, '6 meses'], [12, '12 meses']].map(([v, l]) => '<button type="button" aria-pressed="' + (n === v) + '" data-act="set-range" data-v="' + v + '">' + l + '</button>').join('') + '</div>';

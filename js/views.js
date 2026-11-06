@@ -259,6 +259,36 @@
     html += '<section><h2>Evolução dos gastos</h2>' +
       C.columns(F.monthlySeries(T, S.month, Math.max(6, n)).map((x) => ({ month: x.month, value: x.despesas })), S.month) + '</section>';
 
+    // Quando você gasta: dia da semana e parte do mês (só saídas com data até hoje)
+    const when = F.spendingWhen(T, months, B.today());
+    if (when.count && when.topWeekdays.length) {
+      const pc = (p) => (p > 0 && p < 0.005 ? 'menos de 1%' : Math.round(p * 100) + '%');
+      const bars = (rows, tops, labelOf) => C.ranked(rows.map((r) => ({
+        label: labelOf(r), lead: '', value: r.total, hi: tops.some((t) => t.name === r.name),
+        pctText: r.pct > 0 && r.pct < 0.005 ? '<1%' : Math.round(r.pct * 100) + '%',
+      })));
+      const join = (a) => (a.length < 2 ? a.join('') : a.slice(0, -1).join(', ') + ' e ' + a[a.length - 1]);
+      const few = (msg) => '<p class="when-few">' + icon('info', 'sm') + '<span>' + msg + '</span></p>';
+
+      const wTop = when.topWeekdays;
+      const wLead = wTop.length === 1
+        ? 'Você gasta mais ' + wTop[0].art + ' ' + wTop[0].low + ': ' + brl(wTop[0].total) + ', ' + pc(wTop[0].pct) + ' das saídas.'
+        : 'Empate entre ' + join(wTop.map((r) => r.low)) + ': ' + brl(wTop[0].total) + ' em cada.';
+      html += '<section class="when"><h2>Dia da semana</h2><p class="when-lead">' + esc(wLead) + '</p>' +
+        bars(when.weekdays, wTop, (r) => r.name) +
+        (when.fewWeekdays ? few('Poucos dados ainda: a leitura fica mais confiável depois de umas 4 semanas de uso.') : '') +
+        '<p class="when-note">Conta as saídas com data até hoje. Contas fixas entram no dia do vencimento.</p></section>';
+
+      const pTop = when.topParts;
+      const pLead = pTop.length === 1
+        ? 'Você gasta mais ' + pTop[0].art + ' (' + pTop[0].range + '): ' + brl(pTop[0].total) + ', ' + pc(pTop[0].pct) + ' das saídas.'
+        : 'Empate entre ' + join(pTop.map((r) => r.name.toLowerCase())) + ': ' + brl(pTop[0].total) + ' em cada.';
+      html += '<section class="when"><h2>Parte do mês</h2><p class="when-lead">' + esc(pLead) + '</p>' +
+        bars(when.parts, pTop, (r) => r.label) +
+        (when.fewParts ? few('Poucos dados ainda: a leitura fica mais confiável com 2 meses ou mais de dados.') : '') +
+        '<p class="when-note">Conta as saídas com data até hoje.</p></section>';
+    }
+
     html += '</div><div class="col-b">';
 
     if (ins.length) {

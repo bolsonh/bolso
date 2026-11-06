@@ -425,6 +425,31 @@
     return { start, end, closed: today > end, started: today >= start };
   }
 
+  /** Dia (AAAA-MM-DD, no relógio do aparelho) de um carimbo de data e hora. */
+  function stampDate(iso) {
+    const d = new Date(iso);
+    if (isNaN(d)) return '';
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
+  /** Marca de ajuste: lançamentos que entraram depois que o mês de renda deles fechou.
+      view vem de cycleView. Quem não tem data de lançamento (dados antigos) não conta. */
+  function lateEntries(view, months) {
+    const set = new Set(months);
+    const items = [];
+    let cents = 0;
+    for (const t of view) {
+      if (t.skipped || !set.has(t.month) || !t.created_at) continue;
+      const made = stampDate(t.created_at);
+      if (made && made > cycleDates(t.month).end) {
+        items.push(t);
+        if (t.kind === 'despesa') cents += toCents(t.amount);
+      }
+    }
+    items.sort((a, b) => (a.payDate < b.payDate ? -1 : a.payDate > b.payDate ? 1 : 0));
+    return { items, count: items.length, spent: cents / 100 };
+  }
+
   /** Recebi, gastei e sobra de cada renda nos meses de renda indicados, e o total. view vem de cycleView. */
   function incomeSummary(view, months) {
     const set = new Set(months);
@@ -633,7 +658,7 @@
     monthLabel, monthName, monthShort, dayLabel, uid,
     categoryInfo, instanceOf, missingRecurring, buildInstallments,
     isBilled, invoiceOf, invoiceDates, placeOnInvoice, invoices, incomeOptions, suggestPaySource, chargeDate, dayInt,
-    cycleOf, cycleDates, payDate, cycleView, cycleStatus, incomeSummary, dayNumber,
+    cycleOf, cycleDates, payDate, cycleView, cycleStatus, incomeSummary, dayNumber, stampDate, lateEntries,
     live, summarize, rankBy, byCategory, byCard, monthlySeries, spendingWhen, dowOf, buildInsights, toCSV,
   };
 

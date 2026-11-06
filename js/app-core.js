@@ -28,14 +28,20 @@
   B.$$ = (sel, el) => Array.from((el || root.document).querySelectorAll(sel));
 
   const COLS = {
-    cards: ['id', 'name', 'kind', 'color'],
+    cards: ['id', 'name', 'kind', 'color', 'closing_day', 'due_day', 'pay_source'],
     categories: ['id', 'name', 'emoji'],
     recurring: ['id', 'kind', 'description', 'amount', 'day', 'category', 'card_id', 'source', 'month_offset', 'start_month', 'active'],
     transactions: ['id', 'kind', 'description', 'amount', 'date', 'month', 'category', 'card_id', 'source', 'paid', 'skipped', 'recurring_id', 'group_id', 'installment_no', 'installments_total'],
   };
+  // Colunas novas (fatura do cartão): só seguem para o banco quando têm valor, assim cartões antigos gravam igual a antes.
+  const OPTIONAL = { cards: ['closing_day', 'due_day', 'pay_source'] };
   const pick = (table, row) => {
     const o = {};
-    for (const c of COLS[table]) o[c] = row[c] === undefined ? null : row[c];
+    for (const c of COLS[table]) {
+      const v = row[c] === undefined ? null : row[c];
+      if (v === null && OPTIONAL[table] && OPTIONAL[table].includes(c)) continue;
+      o[c] = v;
+    }
     return o;
   };
   B.pick = pick;
@@ -49,6 +55,8 @@
   B.cardColor = (id) => (id && B.card(id) ? B.card(id).color : 'var(--muted)');
   B.srcName = (key) => (F.SOURCES.find((s) => s.key === key) || F.SOURCES[2]).name;
   B.srcVar = (key) => 'var(--src-' + (F.SOURCES.find((s) => s.key === key) ? key : 'outra') + ')';
+  B.isBilledCard = (id) => F.isBilled(B.card(id));
+  B.isBilledTx = (t) => t.kind === 'despesa' && !!t.card_id && B.isBilledCard(t.card_id);
   B.findTx = (id) => S.data.transactions.find((t) => t.id === id);
   B.findRec = (id) => S.data.recurring.find((r) => r.id === id);
 
@@ -166,6 +174,53 @@
     for (const r of S.data.transactions.concat(S.data.recurring)) if (r.card_id === id) r.card_id = null;
   };
 
+  /* ---------- Faturas do cartão ---------- */
+
+  /** O que muda nas compras ainda não pagas de um cartão quando o fechamento, o vencimento ou a renda dele mudam.
+      As pagas ficam como estão. Devolve { groups: [{ ids, patch }], recs: [id das contas fixas], count }. */
+  B.rebillPlan = (card) => {
+    const out = { groups: [], recs: [], count: 0 };
+    if (!F.isBilled(card)) return out;
+    const byPatch = new Map();
+    for (const t of S.data.transactions) {
+      if (t.card_id !== card.id || t.kind !== 'despesa' || t.paid || t.skipped || t.recurring_id) continue;
+      const month = F.invoiceOf(card, t.date).month;
+      const source = card.pay_source || 'definir';
+      if (month === t.month && source === t.source) continue;
+      const k = month + '|' + source;
+      if (!byPatch.has(k)) byPatch.set(k, { ids: [], patch: { month, source } });
+      byPatch.get(k).ids.push(t.id);
+      out.count++;
+    }
+    out.groups = [...byPatch.values()];
+    out.recs = S.data.recurring.filter((r) => r.card_id === card.id && r.active && r.kind === 'despesa').map((r) => r.id);
+    out.count += S.data.transactions.filter((t) => out.recs.includes(t.recurring_id) && !t.paid && !t.skipped && t.month >= B.curMonth()).length;
+    return out;
+  };
+
+  B.applyRebill = async (card) => {
+    const plan = B.rebillPlan(card);
+    for (const g of plan.groups) await B.updTxs(g.ids, g.patch);
+    for (const id of plan.recs) await purgePending(id);
+    if (plan.recs.length) await B.ensureRecurring(S.month);
+    return plan.count;
+  };
+
+  /** Todas as compras (não puladas) de uma fatura. */
+  B.invoiceOf = (cardId, month) => F.invoices(S.data.transactions, S.data.cards).find((i) => i.card_id === cardId && i.month === month) || null;
+
+  B.setInvoicePaid = async (cardId, month, paid) => {
+    const inv = B.invoiceOf(cardId, month);
+    if (!inv) return;
+    await B.updTxs(inv.ids, { paid });
+  };
+
+  B.setInvoiceSource = async (cardId, month, source) => {
+    const inv = B.invoiceOf(cardId, month);
+    if (!inv) return;
+    await B.updTxs(inv.ids, { source });
+  };
+
   B.addCategory = async (c) => {
     const row = pick('categories', c);
     await S.store.insert('categories', [row]);
@@ -187,7 +242,7 @@
   /** Cria os lançamentos que faltam das contas fixas até o mês pedido. */
   B.ensureRecurring = async (through) => {
     const target = through > B.maxMonth() ? B.maxMonth() : through;
-    const miss = F.missingRecurring(S.data.recurring, S.data.transactions, target);
+    const miss = F.missingRecurring(S.data.recurring, S.data.transactions, target, S.data.cards);
     if (!miss.length) return 0;
     const real = await S.store.insertIgnore('transactions', miss.map((r) => pick('transactions', r)));
     const key = (r) => r.recurring_id + '|' + r.month;

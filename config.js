@@ -7,4 +7,6 @@
 window.APP_CONFIG = {
   SUPABASE_URL: 'https://hjjsrlpsormzzacyfufq.supabase.co',
   SUPABASE_ANON_KEY: 'sb_publishable_7pkH_K2Q8GdTz2mH5Gq2fg_gMKzupw5',
+  // E-mail de contato para pedidos sobre dados pessoais. Aparece na página privacidade.html. Opcional.
+  CONTACT_EMAIL: '',
 };

@@ -102,7 +102,13 @@
       (pl.source === 'definir' ? 'A renda que paga esta fatura está a definir; escolha em Mais, Cartões.' : 'Paga com ' + esc(B.srcName(pl.source)) + '.') + '</p>';
   }
 
+  /** Parcelar só faz sentido numa saída no cartão de crédito. */
+  const canInstall = (d) => { const c = cardOf(d); return !!c && c.kind === 'credito'; };
+  /** Se o cartão mudou para um que não é crédito (ou a entrada virou saída de outro tipo), volta para "Só esta vez". */
+  const fixRepeat = (d) => { if (!d.id && d.repeat === 'installments' && !canInstall(d)) d.repeat = 'once'; };
+
   function txRender(d) {
+    fixRepeat(d);
     const isIn = d.kind === 'receita';
     const edit = !!d.id;
     const m = F.parseMoney(d.amountText);
@@ -131,9 +137,12 @@
     if (!billed) h += '<div class="field"><span>' + (isIn ? 'Esta entrada é do' : 'Pago com o') + '</span>' + seg('source', [['salario', 'Salário'], ['vale', 'Vale'], ['outra', 'Outra fonte']], d.source) + '</div>';
 
     if (!edit) {
-      h += '<div class="field"><span>Repetição</span>' + seg('repeat', isIn ? [['once', 'Só esta vez'], ['monthly', 'Todo mês']] : [['once', 'Só esta vez'], ['monthly', 'Todo mês'], ['installments', 'Parcelado']], d.repeat) + '</div>';
-      if (d.repeat === 'installments') {
-        h += '<label class="field"><span>Número de parcelas</span><input id="f-n" data-in="n" type="number" inputmode="numeric" min="2" max="60" value="' + esc(d.n) + '"></label>' +
+      const inst = d.repeat === 'installments';
+      // "Parcelado?" só existe para cartão de crédito. Dinheiro, Pix e débito não perguntam.
+      if (canInstall(d)) h += '<div class="field"><span>Parcelado?</span>' + seg('parcelado', [['nao', 'Não'], ['sim', 'Sim']], inst ? 'sim' : 'nao') + '</div>';
+      if (!inst) h += '<div class="field"><span>Repetição</span>' + seg('repeat', [['once', 'Só esta vez'], ['monthly', 'Todo mês']], d.repeat) + '</div>';
+      if (inst) {
+        h += '<label class="field"><span>Em quantas vezes?</span><input id="f-n" data-in="n" type="number" inputmode="numeric" min="2" max="60" value="' + esc(d.n) + '"></label>' +
           '<p class="hint" id="inst-hint">' + installHint(d) + '</p>';
       } else if (d.repeat === 'monthly') {
         h += '<p class="hint" id="rep-hint">Entra sozinha todo mês, no dia ' + (d.date ? F.dayOf(d.date) : '') + ', como pendente. Para parar, pause em Mais, Contas fixas.</p>';
@@ -162,10 +171,17 @@
     const total = F.parseMoney(d.amountText);
     const n = parseInt(d.n, 10);
     if (!(total > 0) || !(n >= 2)) return 'Informe o valor total e o número de parcelas.';
+    if (n > 60) return 'Use de 2 a 60 parcelas.';
     const parts = F.splitInstallments(F.toCents(total), n);
     const first = parts[0] / 100, last = parts[n - 1] / 100;
-    return first === last ? n + 'x de ' + F.fmtBRL(first) + '. A primeira vence em ' + F.dayLabel(d.date) + '.'
-      : n + ' parcelas: ' + F.fmtBRL(first) + ' e as últimas de ' + F.fmtBRL(last) + ' (diferença de centavos).';
+    let where = d.date ? ' A primeira vence em ' + F.dayLabel(d.date) + '.' : '';
+    const card = billedOf(d);
+    if (card && d.date) { // cartão com fatura: cada parcela cai numa fatura, uma por mês
+      const ps = F.buildInstallments({ description: 'x', totalAmount: total, n, firstDate: d.date, card, txs: S.data.transactions, source: 'definir', today: B.today() });
+      where = ' A primeira cai na fatura de ' + F.monthName(ps[0].month).toLowerCase() + ' e a última na de ' + F.monthName(ps[n - 1].month).toLowerCase() + '.';
+    }
+    return first === last ? n + 'x de ' + F.fmtBRL(first) + '.' + where
+      : n + ' parcelas: ' + F.fmtBRL(first) + ' e as últimas de ' + F.fmtBRL(last) + ' (diferença de centavos).' + where;
   }
 
   function autofill(d) {
@@ -198,6 +214,7 @@
         if (name === 'card_id') { d.card_id = v || null; d.cardTouched = true; return redraw(); }
         if (name === 'source') { d.source = v; d.sourceTouched = true; return redraw(); }
         if (name === 'repeat') { d.repeat = v; return redraw(); }
+        if (name === 'parcelado') { d.repeat = v === 'sim' ? 'installments' : 'once'; return redraw(); }
         if (name === 'new-card') return openCardSheet(null, d);
         if (name === 'cfg-card') return openCardSheet(d.card_id, d);
         if (name === 'new-cat') return openCategorySheet(d);
@@ -224,6 +241,7 @@
         if (name === 'desc' && autofill(d)) redraw();
       },
       async submit() {
+        fixRepeat(d);
         const amount = F.parseMoney(d.amountText);
         if (!(amount > 0)) return showErr('Digite um valor maior que zero.', '#f-amount');
         if (!d.date) return showErr('Escolha a data.', '#f-date');

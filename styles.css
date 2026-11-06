@@ -184,7 +184,9 @@ section > h2, .sec-head h2 { margin-bottom: 10px; }
 .seal { display: inline-flex; align-items: center; gap: 5px; padding: 1px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-size: 12.5px; font-weight: 650; line-height: 1.7; }
 .seal.partial { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
 .seal.closed { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, var(--line)); }
+.seal.adjust { color: var(--ink2); border-style: dashed; }
 .seal-note { font-size: 13px; color: var(--ink2); }
+.adjust-note { margin: -8px 0 16px; font-size: 13px; color: var(--ink2); overflow-wrap: anywhere; }
 .env.pick { cursor: pointer; margin: 0 -10px; padding-left: 10px; padding-right: 10px; border-radius: 12px; }
 .env.pick.on { background: color-mix(in srgb, var(--brand) 9%, var(--surface)); }
 

@@ -67,6 +67,7 @@
     const chips = [];
     if (!isIn || t.card_id) chips.push('<span class="chip"><i class="dot" style="--c:' + esc(B.cardColor(t.card_id)) + '"></i>' + esc(B.cardName(t.card_id)) + '</span>');
     chips.push('<span class="chip">' + srcDot(t.source) + esc(B.srcName(t.source)) + '</span>');
+    if (B.isBilledTx(t)) chips.push('<span class="chip">' + icon('card', 'xs') + 'Fatura de ' + F.monthName(t.month).toLowerCase() + '</span>');
     if (t.recurring_id) chips.push('<span class="chip">' + icon('repeat', 'xs') + 'Fixa</span>');
     if (t.installments_total) chips.push('<span class="chip">' + t.installment_no + '/' + t.installments_total + '</span>');
     if (isIn && t.month !== F.monthOf(t.date)) chips.push('<span class="chip">Vale para ' + F.monthName(t.month).toLowerCase() + '</span>');
@@ -80,6 +81,36 @@
       '<button type="button" class="pill ' + cls + '" data-act="' + pillAct + '" data-id="' + t.id + '">' + (t.paid && !t.skipped ? icon('check', 'xs') : '') + label + '</button></span></div>';
   }
   V.txRow = txRow;
+
+  /* ---------- Fatura do cartão: uma saída só, no dia do vencimento ---------- */
+
+  function invoiceTitle(inv) { return 'Fatura ' + B.cardName(inv.card_id); }
+  V.invoiceTitle = invoiceTitle;
+
+  function invoiceRow(inv) {
+    const src = inv.source || 'definir';
+    const chips = ['<span class="chip"><i class="dot" style="--c:' + esc(B.cardColor(inv.card_id)) + '"></i>' + inv.count + (inv.count === 1 ? ' compra' : ' compras') + '</span>',
+      '<span class="chip">' + (inv.source ? srcDot(src) + esc(B.srcName(src)) : 'Mais de uma renda') + '</span>'];
+    const cls = inv.paid ? 'ok' : 'pend';
+    return '<div class="tx" role="button" tabindex="0" data-act="open-invoice" data-card="' + inv.card_id + '" data-month="' + inv.month + '">' +
+      '<span class="ico">' + icon('card') + '</span>' +
+      '<span class="tx-main"><span class="tx-desc">' + esc(invoiceTitle(inv)) + '</span><span class="tx-meta">' + chips.join('') + '</span></span>' +
+      '<span class="tx-side"><b class="num out">' + brl(inv.total) + '</b>' +
+      '<button type="button" class="pill ' + cls + '" data-act="toggle-invoice-paid" data-card="' + inv.card_id + '" data-month="' + inv.month + '">' + (inv.paid ? icon('check', 'xs') + 'Paga' : 'Pendente') + '</button></span></div>';
+  }
+  V.invoiceRow = invoiceRow;
+
+  /** Uma compra dentro da janela da fatura. */
+  V.invoiceItem = function (t) {
+    const cat = B.cat(t.category);
+    const chips = ['<span class="chip">' + F.pad(F.dayOf(t.date)) + '/' + t.date.slice(5, 7) + '</span>'];
+    if (t.recurring_id) chips.push('<span class="chip">' + icon('repeat', 'xs') + 'Fixa</span>');
+    if (t.installments_total) chips.push('<span class="chip">' + t.installment_no + '/' + t.installments_total + '</span>');
+    return '<div class="tx" role="button" tabindex="0" data-act="edit-tx" data-id="' + t.id + '">' +
+      '<span class="ico">' + cat.emoji + '</span>' +
+      '<span class="tx-main"><span class="tx-desc">' + esc(t.description) + '</span><span class="tx-meta">' + chips.join('') + '</span></span>' +
+      '<span class="tx-side"><b class="num out">' + brl(t.amount) + '</b></span></div>';
+  };
 
   /* ---------- Resumo ---------- */
 
@@ -115,7 +146,7 @@
     for (const s of F.SOURCES) {
       const f = sum.fontes[s.key];
       const used = f.entrou > 0 || f.gastou > 0;
-      if (s.key === 'outra' && !used) continue;
+      if ((s.key === 'outra' || s.key === 'definir') && !used) continue;
       const over = f.resta < 0;
       html += '<div class="env"><div class="env-top"><span class="env-name">' + srcDot(s.key) + '<b>' + s.name + '</b></span>' +
         (used ? '<span class="env-left' + (over ? ' neg' : '') + '">' + (over ? icon('alert', 'xs') + 'Passou ' + brl(-f.resta) : 'Resta ' + brl(f.resta)) + '</span>' : '<span class="muted-text">Nada lançado</span>') + '</div>' +
@@ -126,17 +157,26 @@
     }
     html += '</div></section></div><div class="col-b">';
 
-    // Próximas contas
-    const pend = T.filter((t) => t.month === m && t.kind === 'despesa' && !t.paid && !t.skipped).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-    html += '<section><div class="sec-head"><h2>Contas para pagar</h2>' + (pend.length > 6 ? '<button type="button" class="link-btn" data-act="go" data-to="extrato" data-status="pendente">Ver todas (' + pend.length + ')</button>' : '') + '</div>';
-    if (!pend.length) {
+    // Próximas contas (compras no cartão com fatura entram como uma saída só, no vencimento)
+    const bills = T.filter((t) => t.month === m && t.kind === 'despesa' && !t.paid && !t.skipped && !B.isBilledTx(t)).map((t) => ({ t, date: t.date }))
+      .concat(F.invoices(T, S.data.cards).filter((i) => i.month === m && !i.paid).map((inv) => ({ inv, date: inv.dueDate })))
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    html += '<section><div class="sec-head"><h2>Contas para pagar</h2>' + (bills.length > 6 ? '<button type="button" class="link-btn" data-act="go" data-to="extrato" data-status="pendente">Ver todas (' + bills.length + ')</button>' : '') + '</div>';
+    if (!bills.length) {
       html += '<p class="empty-line">' + (sum.count ? 'Nada pendente neste mês.' : 'Quando você lançar contas, as que faltam pagar aparecem aqui.') + '</p>';
     } else {
-      html += '<ul class="due">' + pend.slice(0, 6).map((t) => {
-        const di = dueInfo(t);
+      html += '<ul class="due">' + bills.slice(0, 6).map((b) => {
+        const di = dueInfo({ date: b.date });
+        const when = '<span class="due-when' + (di.late ? ' late' : '') + '">' + (di.late ? icon('alert', 'xs') : '') + di.text + '</span>';
+        if (b.inv) {
+          const inv = b.inv, nm = invoiceTitle(inv);
+          return '<li class="due-row"><button type="button" class="check" data-act="toggle-invoice-paid" data-card="' + inv.card_id + '" data-month="' + inv.month + '" aria-label="Marcar ' + esc(nm) + ' como paga"></button>' +
+            '<div class="due-main" role="button" tabindex="0" data-act="open-invoice" data-card="' + inv.card_id + '" data-month="' + inv.month + '"><span class="due-desc">' + esc(nm) + '</span>' + when + '</div>' +
+            '<b class="num due-amt">' + brl(inv.pending) + '</b></li>';
+        }
+        const t = b.t;
         return '<li class="due-row"><button type="button" class="check" data-act="toggle-paid" data-id="' + t.id + '" aria-label="Marcar ' + esc(t.description) + ' como pago"></button>' +
-          '<div class="due-main" role="button" tabindex="0" data-act="edit-tx" data-id="' + t.id + '"><span class="due-desc">' + esc(t.description) + '</span>' +
-          '<span class="due-when' + (di.late ? ' late' : '') + '">' + (di.late ? icon('alert', 'xs') : '') + di.text + '</span></div>' +
+          '<div class="due-main" role="button" tabindex="0" data-act="edit-tx" data-id="' + t.id + '"><span class="due-desc">' + esc(t.description) + '</span>' + when + '</div>' +
           '<b class="num due-amt">' + brl(t.amount) + '</b></li>';
       }).join('') + '</ul>';
     }
@@ -165,30 +205,43 @@
   }
 
   V.extratoList = function () {
-    const list = filteredTxs();
+    const f = S.f;
+    let list = filteredTxs();
+    // Com busca ou filtro de nicho, mostra cada compra; sem eles, as compras do cartão com fatura viram uma saída só.
+    const flat = !!(f.cat || f.q.trim() || f.status === 'pulada');
+    let invs = [];
+    if (!flat) {
+      list = list.filter((t) => t.skipped || !B.isBilledTx(t));
+      invs = F.invoices(S.data.transactions, S.data.cards).filter((i) => i.month === S.month &&
+        f.kind !== 'entradas' && (!f.card || i.card_id === f.card) && (!f.src || i.source === f.src) &&
+        (!f.status || (f.status === 'pendente' ? !i.paid : i.paid)));
+    }
     const order = S.data.transactions;
     const idx = new Map(order.map((t, i) => [t.id, i]));
-    list.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : idx.get(b.id) - idx.get(a.id)));
-    const live = list.filter((t) => !t.skipped);
-    const out = live.filter((t) => t.kind === 'despesa').reduce((s, t) => s + F.toCents(t.amount), 0) / 100;
-    const inn = live.filter((t) => t.kind === 'receita').reduce((s, t) => s + F.toCents(t.amount), 0) / 100;
-    const hasFilter = S.f.kind !== 'todos' || S.f.card || S.f.cat || S.f.src || S.f.status || S.f.q;
-    if (!list.length) {
+    const items = list.map((t) => ({ date: t.date, t, ord: idx.get(t.id) })).concat(invs.map((inv) => ({ date: inv.dueDate, inv, ord: Infinity })));
+    items.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.ord === a.ord ? 0 : b.ord > a.ord ? 1 : -1));
+    const cents = (it) => (it.inv ? it.inv.cents : F.toCents(it.t.amount));
+    const live = items.filter((it) => it.inv || !it.t.skipped);
+    const isOut = (it) => it.inv || it.t.kind === 'despesa';
+    const out = live.filter(isOut).reduce((sum, it) => sum + cents(it), 0) / 100;
+    const inn = live.filter((it) => !isOut(it)).reduce((sum, it) => sum + cents(it), 0) / 100;
+    const hasFilter = f.kind !== 'todos' || f.card || f.cat || f.src || f.status || f.q;
+    if (!items.length) {
       return '<p class="empty-box">' + (hasFilter ? 'Nenhum lançamento com esses filtros.' : 'Nenhum lançamento em ' + F.monthName(S.month).toLowerCase() + '. Toque no botão + para começar.') + '</p>';
     }
     let html = '<p class="sum-line"><span>' + live.length + (live.length === 1 ? ' lançamento' : ' lançamentos') + '</span>' +
       (out ? '<span>Saiu ' + R(out) + '</span>' : '') + (inn ? '<span>Entrou ' + R(inn) + '</span>' : '') + '</p>';
     const groups = [];
-    for (const t of list) {
+    for (const it of items) {
       const g = groups[groups.length - 1];
-      if (g && g.date === t.date) g.items.push(t); else groups.push({ date: t.date, items: [t] });
+      if (g && g.date === it.date) g.items.push(it); else groups.push({ date: it.date, items: [it] });
     }
     for (const g of groups) {
-      const dayOut = g.items.filter((t) => t.kind === 'despesa' && !t.skipped).reduce((s, t) => s + F.toCents(t.amount), 0) / 100;
-      html += '<section class="day"><h3>' + F.dayLabel(g.date) + (dayOut ? '<span class="num">' + brl(dayOut) + '</span>' : '') + '</h3>' + g.items.map((t) => txRow(t)).join('') + '</section>';
+      const dayOut = g.items.filter((it) => isOut(it) && (it.inv || !it.t.skipped)).reduce((sum, it) => sum + cents(it), 0) / 100;
+      html += '<section class="day"><h3>' + F.dayLabel(g.date) + (dayOut ? '<span class="num">' + brl(dayOut) + '</span>' : '') + '</h3>' + g.items.map((it) => (it.inv ? invoiceRow(it.inv) : txRow(it.t))).join('') + '</section>';
     }
     return html;
-  }
+  };
 
   V.extrato = function () {
     const f = S.f;
@@ -360,13 +413,19 @@
     return html;
   };
 
+  function cardSub(c) {
+    if (c.kind === 'debito') return 'Débito';
+    if (!F.isBilled(c)) return 'Crédito. Falta informar o fechamento e o vencimento';
+    return 'Crédito. Fecha dia ' + c.closing_day + ', vence dia ' + c.due_day + '. ' + (c.pay_source ? 'Paga com ' + esc(B.srcName(c.pay_source)) : 'Renda a definir');
+  }
+
   V.cartoes = function () {
     const m = S.month;
     let html = backHead('Cartões', '<button type="button" class="btn small primary" data-act="new-card">' + icon('plus', 'xs') + 'Novo</button>');
     html += '<p class="muted-text lead">Gastos em ' + F.monthName(m).toLowerCase() + ' por cartão. Troque o mês no Resumo para ver outro período.</p>';
     const tot = new Map(F.byCard(S.data.transactions, [m]).rows.map((r) => [r.key, r.total]));
     html += '<div class="list"><div class="list-item static"><span class="ico"><i class="dot lg" style="--c:var(--muted)"></i></span><span class="li-text"><b>' + F.CASH_NAME + '</b><small>Sempre disponível</small></span><b class="num">' + brl(tot.get('_dinheiro') || 0) + '</b></div>' +
-      S.data.cards.map((c) => '<button type="button" class="list-item" data-act="edit-card" data-id="' + c.id + '"><span class="ico"><i class="dot lg" style="--c:' + esc(c.color) + '"></i></span><span class="li-text"><b>' + esc(c.name) + '</b><small>' + (c.kind === 'debito' ? 'Débito' : 'Crédito') + '</small></span><b class="num">' + brl(tot.get(c.id) || 0) + '</b></button>').join('') + '</div>';
+      S.data.cards.map((c) => '<button type="button" class="list-item" data-act="edit-card" data-id="' + c.id + '"><span class="ico"><i class="dot lg" style="--c:' + esc(c.color) + '"></i></span><span class="li-text"><b>' + esc(c.name) + '</b><small>' + cardSub(c) + '</small></span><b class="num">' + brl(tot.get(c.id) || 0) + '</b></button>').join('') + '</div>';
     if (!S.data.cards.length) html += '<p class="empty-box">Cadastre seus cartões para ver quanto cada um está gastando.</p>';
     return html;
   };
@@ -450,6 +509,13 @@
     const t = B.findTx(el.dataset.id);
     await B.updTx(t.id, { skipped: false });
     B.toast('Voltou a contar neste mês.');
+    B.render();
+  });
+  A['toggle-invoice-paid'] = (el) => B.guard(async () => {
+    const inv = B.invoiceOf(el.dataset.card, el.dataset.month);
+    if (!inv) return;
+    await B.setInvoicePaid(inv.card_id, inv.month, !inv.paid);
+    B.toast(inv.paid ? 'Fatura voltou para pendente.' : 'Fatura marcada como paga.');
     B.render();
   });
   A.signout = () => B.guard(async () => { await S.store.auth.signOut(); });

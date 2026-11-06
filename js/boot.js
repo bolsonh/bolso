@@ -23,15 +23,21 @@
   /* ---------- Login (modo Supabase) ---------- */
 
   let authMode = 'in';
+  let awaitingTerms = false; // true enquanto a tela de aceite está aberta
+
+  const consentRow = '<label class="consent"><input type="checkbox" id="a-terms"><span>Tenho 18 anos ou mais e aceito a <a href="privacidade.html" target="_blank" rel="noopener">política de privacidade e os termos de uso</a>.</span></label>';
+  const consentData = () => ({ aceite_termos: F.TERMS_VERSION, aceite_em: new Date().toISOString() });
+  const termsOk = (session) => !!(session && session.user && session.user.user_metadata && session.user.user_metadata.aceite_termos === F.TERMS_VERSION);
   let recovery = /type=recovery/.test((root.location.hash || '') + (root.location.search || ''));
 
   function authView(mode, info) {
     authMode = mode;
+    awaitingTerms = false;
     setState('auth');
     const titles = { in: 'Entrar', up: 'Criar conta', reset: 'Recuperar senha', newpw: 'Nova senha' };
     const lead = {
       in: 'Seu dinheiro, do salário ao vale, em um só lugar.',
-      up: 'Crie sua conta. Os dados ficam só no seu Supabase.',
+      up: 'Seus lançamentos ficam guardados na nuvem, ligados ao seu e-mail.',
       reset: 'Digite seu e-mail e enviamos um link para criar uma senha nova.',
       newpw: 'Escolha uma senha nova para a sua conta.',
     };
@@ -41,6 +47,7 @@
       '<form id="auth-form" novalidate>' +
       (needsEmail ? '<label class="field"><span>E-mail</span><input id="a-email" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false"></label>' : '') +
       (needsPass ? '<label class="field"><span>' + (mode === 'newpw' ? 'Senha nova' : 'Senha') + '</span><input id="a-pass" type="password" autocomplete="' + (mode === 'in' ? 'current-password' : 'new-password') + '"></label>' : '') +
+      (mode === 'up' ? consentRow : '') +
       '<p class="form-err" id="a-err" role="alert"></p>' +
       (info ? '<p class="callout">' + esc(info) + '</p>' : '') +
       '<button type="submit" class="btn primary wide" id="a-go">' + ({ in: 'Entrar', up: 'Criar conta', reset: 'Enviar link', newpw: 'Salvar senha' })[mode] + '</button></form>' +
@@ -58,6 +65,7 @@
     err.textContent = '';
     if (authMode !== 'newpw' && !/^\S+@\S+\.\S+$/.test(email)) { err.textContent = 'Digite um e-mail válido.'; B.$('#a-email').focus(); return; }
     if (authMode !== 'reset' && pass.length < 6) { err.textContent = 'A senha precisa ter pelo menos 6 caracteres.'; B.$('#a-pass').focus(); return; }
+    if (authMode === 'up' && !B.$('#a-terms').checked) { err.textContent = 'Marque a caixa para aceitar a política de privacidade e os termos de uso.'; B.$('#a-terms').focus(); return; }
     go.disabled = true;
     try {
       const auth = S.store.auth;
@@ -65,7 +73,7 @@
         const session = await auth.signIn(email, pass);
         await startApp(session);
       } else if (authMode === 'up') {
-        const res = await auth.signUp(email, pass);
+        const res = await auth.signUp(email, pass, consentData());
         if (res.session) await startApp(res.session);
         else authView('in', 'Conta criada. Enviamos um e-mail de confirmação para ' + email + '. Clique no link dele e depois entre aqui.');
       } else if (authMode === 'reset') {
@@ -86,18 +94,47 @@
   function onAuthEvent(event, session) {
     if (event === 'PASSWORD_RECOVERY') { recovery = true; authView('newpw'); return; }
     if (event === 'SIGNED_OUT') { S.user = null; S.data = { cards: [], categories: [], recurring: [], transactions: [] }; recovery = false; authView('in'); return; }
-    if (event === 'SIGNED_IN' && session && doc.body.dataset.state !== 'app' && !recovery) {
+    if (event === 'SIGNED_IN' && session && doc.body.dataset.state !== 'app' && !recovery && !awaitingTerms) {
       setTimeout(() => startApp(session), 0); // fora do callback, como a biblioteca recomenda
+    }
+  }
+
+  /* ---------- Aceite da política e dos termos (contas que ainda não aceitaram esta versão) ---------- */
+
+  function termsView() {
+    awaitingTerms = true;
+    setState('auth');
+    B.$('#view').innerHTML = '<div class="auth">' + MARK + '<h1>Antes de continuar</h1>' +
+      '<p class="muted-text">Para usar o Bolso, leia e aceite a política de privacidade e os termos de uso. Você faz isso uma vez, e de novo só se eles mudarem.</p>' +
+      '<form id="terms-form" novalidate>' + consentRow + '<p class="form-err" id="a-err" role="alert"></p>' +
+      '<button type="submit" class="btn primary wide" id="a-go">Continuar</button></form>' +
+      '<div class="auth-links"><button type="button" class="link-btn" data-act="signout">Sair da conta</button></div></div>';
+  }
+
+  async function submitTerms() {
+    const err = B.$('#a-err'), go = B.$('#a-go');
+    err.textContent = '';
+    if (!B.$('#a-terms').checked) { err.textContent = 'Marque a caixa para continuar.'; B.$('#a-terms').focus(); return; }
+    go.disabled = true;
+    try {
+      const user = await S.store.auth.acceptTerms(consentData());
+      awaitingTerms = false;
+      await startApp({ user }, true);
+    } catch (e) {
+      err.textContent = e.message || 'Algo deu errado. Tente de novo.';
+      go.disabled = false;
     }
   }
 
   /* ---------- Início do app ---------- */
 
   let starting = false;
-  async function startApp(session) {
+  async function startApp(session, termsJustAccepted) {
     if (starting) return;
     starting = true;
     try {
+      if (S.store.mode === 'supabase' && !termsJustAccepted && !termsOk(session)) { termsView(); return; }
+      awaitingTerms = false;
       setState('loading');
       S.user = session ? session.user : null;
       const ok = await B.guard(async () => {
@@ -127,7 +164,10 @@
     doc.addEventListener('keydown', (e) => {
       if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('[role="button"][data-act]')) { e.preventDefault(); e.target.click(); }
     });
-    doc.addEventListener('submit', (e) => { if (e.target.id === 'auth-form') { e.preventDefault(); submitAuth(); } });
+    doc.addEventListener('submit', (e) => {
+      if (e.target.id === 'auth-form') { e.preventDefault(); submitAuth(); }
+      if (e.target.id === 'terms-form') { e.preventDefault(); submitTerms(); }
+    });
     doc.addEventListener('change', (e) => {
       const el = e.target;
       if (el.matches && el.matches('[data-filter]')) { S.f[el.dataset.filter] = el.value; B.render(); }

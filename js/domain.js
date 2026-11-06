@@ -251,6 +251,70 @@
     });
   }
 
+  /* ---------- Quando você gasta: dia da semana e parte do mês ---------- */
+
+  const WEEKDAY_ROWS = [ // índice = Date#getDay (0 = domingo)
+    { dow: 1, name: 'Segunda-feira', short: 'Seg', art: 'na', low: 'segunda-feira' },
+    { dow: 2, name: 'Terça-feira', short: 'Ter', art: 'na', low: 'terça-feira' },
+    { dow: 3, name: 'Quarta-feira', short: 'Qua', art: 'na', low: 'quarta-feira' },
+    { dow: 4, name: 'Quinta-feira', short: 'Qui', art: 'na', low: 'quinta-feira' },
+    { dow: 5, name: 'Sexta-feira', short: 'Sex', art: 'na', low: 'sexta-feira' },
+    { dow: 6, name: 'Sábado', short: 'Sáb', art: 'no', low: 'sábado' },
+    { dow: 0, name: 'Domingo', short: 'Dom', art: 'no', low: 'domingo' },
+  ];
+
+  const MONTH_PARTS = [
+    { key: 'inicio', name: 'Início do mês', range: 'dias 1 a 10', label: 'Início (1 a 10)', from: 1, to: 10, art: 'no início do mês' },
+    { key: 'meio', name: 'Meio do mês', range: 'dias 11 a 20', label: 'Meio (11 a 20)', from: 11, to: 20, art: 'no meio do mês' },
+    { key: 'fim', name: 'Fim do mês', range: 'dia 21 em diante', label: 'Fim (21 em diante)', from: 21, to: 31, art: 'no fim do mês' },
+  ];
+
+  const WEEKDAY_MIN_DAYS = 28; // menos de 4 semanas de dados: avisa que ainda é pouco
+  const PART_MIN_MONTHS = 2;   // menos de 2 meses com gastos: avisa que ainda é pouco
+
+  /** Dia da semana (0 = domingo) de uma data AAAA-MM-DD, sem depender de fuso. */
+  function dowOf(dateStr) {
+    const p = String(dateStr).split('-').map(Number);
+    return new Date(Date.UTC(p[0], p[1] - 1, p[2])).getUTCDay();
+  }
+
+  const dayNumber = (dateStr) => { const p = String(dateStr).split('-').map(Number); return Math.floor(Date.UTC(p[0], p[1] - 1, p[2]) / 86400000); };
+
+  /** Em que dia da semana e em que parte do mês saiu mais dinheiro.
+      Conta só despesas já ocorridas (data até hoje), no mesmo período da tela. Contas fixas contam no dia do vencimento. */
+  function spendingWhen(txs, months, today) {
+    const exp = expensesIn(txs, new Set(months)).filter((t) => t.date && t.date <= today);
+    const wd = new Map(WEEKDAY_ROWS.map((w) => [w.dow, { cents: 0, count: 0 }]));
+    const pt = new Map(MONTH_PARTS.map((p) => [p.key, { cents: 0, count: 0 }]));
+    const monthsSeen = new Set();
+    let totalC = 0, first = null, last = null;
+    for (const t of exp) {
+      const c = toCents(t.amount);
+      totalC += c;
+      const w = wd.get(dowOf(t.date)); w.cents += c; w.count++;
+      const d = Number(t.date.slice(8, 10));
+      const part = MONTH_PARTS.find((p) => d >= p.from && d <= p.to);
+      const q = pt.get(part.key); q.cents += c; q.count++;
+      monthsSeen.add(t.date.slice(0, 7));
+      if (first === null || t.date < first) first = t.date;
+      if (last === null || t.date > last) last = t.date;
+    }
+    const row = (base, v) => Object.assign({}, base, { total: v.cents / 100, count: v.count, pct: totalC ? v.cents / totalC : 0 });
+    const weekdays = WEEKDAY_ROWS.map((w) => row(w, wd.get(w.dow)));
+    const parts = MONTH_PARTS.map((p) => row(p, pt.get(p.key)));
+    const topOf = (rows) => {
+      const max = Math.max.apply(null, rows.map((r) => r.total));
+      return max > 0 ? rows.filter((r) => r.total === max) : [];
+    };
+    const spanDays = first ? dayNumber(last) - dayNumber(first) + 1 : 0;
+    return {
+      count: exp.length, total: totalC / 100, weekdays, parts,
+      topWeekdays: topOf(weekdays), topParts: topOf(parts),
+      spanDays, monthsWithData: monthsSeen.size,
+      fewWeekdays: spanDays < WEEKDAY_MIN_DAYS, fewParts: monthsSeen.size < PART_MIN_MONTHS,
+    };
+  }
+
   /* ---------- Frases de análise ---------- */
 
   const pctText = (p) => (p > 0 && p < 0.005 ? 'menos de 1%' : Math.round(p * 100) + '%');
@@ -355,7 +419,7 @@
     pad, todayStr, monthOf, dayOf, addMonths, monthDiff, daysInMonth, dateIn, rangeMonths,
     monthLabel, monthName, monthShort, dayLabel, uid,
     categoryInfo, instanceOf, missingRecurring, buildInstallments,
-    live, summarize, rankBy, byCategory, byCard, monthlySeries, buildInsights, toCSV,
+    live, summarize, rankBy, byCategory, byCard, monthlySeries, spendingWhen, dowOf, buildInsights, toCSV,
   };
 
   root.Fin = Fin;

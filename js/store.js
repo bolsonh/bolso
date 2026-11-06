@@ -34,13 +34,20 @@
       catch (e) { blocked = true; memory = d; }
     }
 
+    // como o banco, que carimba sozinho a hora em que cada lançamento entrou
+    const stamped = (table, rows) => {
+      const out = clone(rows);
+      if (table === 'transactions') { const now = new Date().toISOString(); for (const r of out) if (!r.created_at) r.created_at = now; }
+      return out;
+    };
+
     return {
       mode: 'local',
       async init() {},
       async load() { return clone(read()); },
       async insert(table, rows) {
         const d = read();
-        d[table].push(...clone(rows));
+        d[table].push(...stamped(table, rows));
         write(d);
         return rows;
       },
@@ -48,7 +55,7 @@
         const d = read();
         const have = new Set(d[table].filter((r) => r.recurring_id).map((r) => r.recurring_id + '|' + r.month));
         const added = rows.filter((r) => !have.has(r.recurring_id + '|' + r.month));
-        d[table].push(...clone(added));
+        d[table].push(...stamped(table, added));
         write(d);
         return added;
       },

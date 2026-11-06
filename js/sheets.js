@@ -102,6 +102,18 @@
       (pl.source === 'definir' ? 'A renda que paga esta fatura está a definir; escolha em Mais, Cartões.' : 'Paga com ' + esc(B.srcName(pl.source)) + '.') + '</p>';
   }
 
+  /** Aviso ao lançar com data antiga: se cair num mês de renda que já fechou, entra mesmo assim e fica com marca de ajuste. */
+  function lateNote(d) {
+    if (d.id || !d.date) return '';
+    const card = d.kind === 'despesa' ? billedOf(d) : null;
+    const paidOn = card ? billedPlace(d, card).dueDate : d.date; // fatura conta no vencimento; o resto, na data
+    const cyc = F.cycleOf(paidOn);
+    const end = F.cycleDates(cyc).end;
+    if (B.today() <= end) return '';
+    return '<p class="hint">Cai no mês de renda de <b>' + esc(F.monthName(cyc).toLowerCase()) + '</b>, que fechou em ' + dm(end) +
+      '. Entra mesmo assim: o mês continua fechado e ganha uma marca de ajuste.</p>';
+  }
+
   /** Parcelar só faz sentido numa saída no cartão de crédito. */
   const canInstall = (d) => { const c = cardOf(d); return !!c && c.kind === 'credito'; };
   /** Se o cartão mudou para um que não é crédito (ou a entrada virou saída de outro tipo), volta para "Só esta vez". */
@@ -132,6 +144,7 @@
         '<button type="button" class="opt add" data-f="new-card">+ Novo cartão</button></div></div>' +
         '<div id="card-note">' + cardNote(d) + '</div>';
     }
+    h += '<div id="late-note">' + lateNote(d) + '</div>';
 
     const billed = !!billedOf(d);
     if (!billed) h += '<div class="field"><span>' + (isIn ? 'Esta entrada é do' : 'Pago com o') + '</span>' + seg('source', [['salario', 'Salário'], ['vale', 'Vale'], ['outra', 'Outra fonte']], d.source) + '</div>';
@@ -229,6 +242,8 @@
           const rh = B.$('#rep-hint');
           const cn = B.$('#card-note');
           if (cn) cn.innerHTML = cardNote(d);
+          const ln = B.$('#late-note');
+          if (ln) ln.innerHTML = lateNote(d);
           if (rh && d.date) rh.textContent = 'Entra sozinha todo mês, no dia ' + F.dayOf(d.date) + ', como pendente. Para parar, pause em Mais, Contas fixas.';
         }
         if (name === 'n') d.n = el.value;

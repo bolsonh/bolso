@@ -95,6 +95,7 @@
       [/failed to fetch|networkerror|load failed|network request failed/i, 'Sem conexão com o Supabase. Confira a internet e tente de novo.'],
       [/jwt expired|invalid jwt|refresh_token/i, 'Sua sessão expirou. Entre de novo.'],
       [/permission denied|row-level security|violates row-level/i, 'O banco recusou a gravação. Rode o arquivo schema.sql no Supabase e entre de novo.'],
+      [/could not find the '[^']+' column|column .* does not exist|transactions_source_check/i, 'O banco ainda não tem a atualização da fatura do cartão. Rode o arquivo supabase/migracao-02-fatura.sql no SQL Editor do Supabase e tente de novo.'],
       [/relation .* does not exist|could not find the table|schema cache/i, 'As tabelas ainda não existem no Supabase. Rode o arquivo schema.sql no SQL Editor.'],
       [/invalid api key|apikey/i, 'A chave do Supabase em config.js está errada.'],
     ];

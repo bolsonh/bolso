@@ -68,7 +68,7 @@ Depois, já logado no app com Supabase: **Restaurar de um backup** e escolha o a
 
 ## Atualizar um banco que já existe
 
-Quando uma versão nova do app precisa de colunas novas, ela vem com um arquivo em `supabase/` (por exemplo `migracao-02-fatura.sql`).
+Quando uma versão nova do app precisa de colunas ou funções novas, ela vem com um arquivo em `supabase/` (por exemplo `migracao-02-fatura.sql` para a fatura do cartão e `migracao-03-excluir-conta.sql` para o botão "Excluir minha conta").
 Cole o arquivo no **SQL Editor** do Supabase e clique em **Run**. Ele só acrescenta, não apaga nem altera nenhum dado, e pode ser rodado de novo sem problema.
 Quem criar o banco do zero com `schema.sql` já recebe tudo.
 

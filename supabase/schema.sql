@@ -9,6 +9,9 @@ create table if not exists public.cards (
   name        text not null,
   kind        text not null default 'credito' check (kind in ('credito', 'debito')),
   color       text not null default '#2a78d6',
+  closing_day int  check (closing_day between 1 and 31),   -- crédito: dia em que a fatura fecha
+  due_day     int  check (due_day between 1 and 31),       -- crédito: dia em que a fatura vence
+  pay_source  text check (pay_source in ('salario', 'vale', 'outra')), -- renda que paga a fatura (vazio = a definir)
   created_at  timestamptz not null default now()
 );
 
@@ -49,7 +52,7 @@ create table if not exists public.transactions (
   month               text not null,                 -- mês de competência, formato AAAA-MM
   category            text,
   card_id             uuid references public.cards(id) on delete set null,
-  source              text not null default 'salario' check (source in ('salario', 'vale', 'outra')),
+  source              text not null default 'salario' check (source in ('salario', 'vale', 'outra', 'definir')),
   paid                boolean not null default true,
   skipped             boolean not null default false,
   recurring_id        uuid references public.recurring(id) on delete set null,
@@ -95,3 +98,23 @@ grant select, insert, update, delete on public.categories   to authenticated;
 grant select, insert, update, delete on public.recurring    to authenticated;
 grant select, insert, update, delete on public.transactions to authenticated;
 revoke all on public.cards, public.categories, public.recurring, public.transactions from anon;
+
+-- 7) Atualização de bancos criados antes da fatura do cartão (#13) -------
+-- Só acrescenta: colunas novas sem valor obrigatório e uma opção a mais ("definir") na fonte do lançamento.
+-- Não apaga nem altera nenhum dado. Pode rodar de novo sem medo.
+alter table public.cards add column if not exists closing_day int check (closing_day between 1 and 31);
+alter table public.cards add column if not exists due_day     int check (due_day between 1 and 31);
+alter table public.cards add column if not exists pay_source  text check (pay_source in ('salario', 'vale', 'outra'));
+
+do $$
+begin
+  if exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.transactions'::regclass and conname = 'transactions_source_check'
+      and pg_get_constraintdef(oid) not like '%definir%'
+  ) then
+    alter table public.transactions drop constraint transactions_source_check;
+    alter table public.transactions add constraint transactions_source_check
+      check (source in ('salario', 'vale', 'outra', 'definir'));
+  end if;
+end $$;

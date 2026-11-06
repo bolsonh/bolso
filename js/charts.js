@@ -10,7 +10,7 @@
 
   /** Barras horizontais ordenadas (partes de um todo, comparar e ranquear). */
   function ranked(rows) {
-    // rows: [{label, lead (emoji ou bolinha em HTML), value, pct}]
+    // rows: [{label, lead (emoji ou bolinha em HTML), value, pctText, hi (opcional: true destaca; sem hi, destaca o primeiro)}]
     if (!rows.length) return '';
     const max = Math.max.apply(null, rows.map((r) => r.value)) || 1;
     return '<ul class="rank">' + rows.map((r, i) => {
@@ -19,7 +19,7 @@
         '<div class="rank-top"><span class="rank-label">' + r.lead + '<span class="rank-name">' + esc(r.label) + '</span></span>' +
         '<span class="rank-val num">' + F.fmtBRL(r.value) + '</span>' +
         '<span class="rank-pct num">' + esc(r.pctText) + '</span></div>' +
-        '<div class="rank-bar" aria-hidden="true"><i class="' + (i === 0 ? 'top' : '') + '" style="width:' + w.toFixed(2) + '%"></i></div>' +
+        '<div class="rank-bar" aria-hidden="true"><i class="' + ((r.hi != null ? r.hi : i === 0) ? 'top' : '') + '" style="width:' + w.toFixed(2) + '%"></i></div>' +
         '</li>';
     }).join('') + '</ul>';
   }

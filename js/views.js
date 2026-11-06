@@ -270,10 +270,52 @@
     return F.monthShort(a) + ' ' + a.slice(0, 4) + ' a ' + F.monthShort(z) + ' ' + z.slice(0, 4);
   }
 
+  const fullDate = (s) => F.pad(F.dayOf(s)) + '/' + s.slice(5, 7) + '/' + s.slice(0, 4);
+  const shortDate = (s) => F.pad(F.dayOf(s)) + '/' + s.slice(5, 7);
+
+  /** Como medir: pela renda (principal, mês de renda de 15 a 14) ou pelo mês do calendário (apoio). */
+  function anaSwitch() {
+    const renda = S.ana.by !== 'calendario';
+    return '<div class="seg" role="group" aria-label="Como medir">' +
+      [['renda', 'Por renda'], ['calendario', 'Mês do calendário']].map(([v, l]) => '<button type="button" aria-pressed="' + ((v === 'renda') === renda) + '" data-act="set-ana-by" data-v="' + v + '">' + l + '</button>').join('') + '</div>';
+  }
+
+  /** Cabeçalho das Análises por renda: o mês de renda em foco, a navegação e o selo da medição. */
+  function cycleHead(endM, months, st) {
+    const cur = F.cycleOf(B.today());
+    const isCur = endM === cur;
+    const top = F.addMonths(B.maxMonth(), -1);
+    const one = months.length === 1;
+    const cover = one
+      ? 'Rendas recebidas em ' + F.monthName(endM).toLowerCase() + '. Cobre de ' + shortDate(st.start) + ' a ' + shortDate(st.end) + '.'
+      : 'Rendas recebidas de ' + F.monthShort(months[0]) + ' a ' + F.monthShort(endM) + '. Cobre de ' + fullDate(st.start) + ' a ' + fullDate(st.end) + '.';
+    const seal = st.closed
+      ? '<span class="seal closed">' + icon('check', 'xs') + 'Mês fechado</span><span class="seal-note">Fechou em ' + shortDate(st.end) + '.</span>'
+      : '<span class="seal partial">' + icon('info', 'xs') + 'Medição parcial</span><span class="seal-note">' +
+        (st.started ? 'Vai até ' + shortDate(st.end) + ' e ainda pode entrar gasto.' : 'Começa em ' + shortDate(st.start) + '.') + '</span>';
+    return '<header class="head"><div class="head-title"><h1>' + F.monthName(endM) + ' <span class="yr">' + endM.slice(0, 4) + '</span></h1>' +
+      (isCur ? '' : '<button type="button" class="link-btn" data-act="cycle-today">Ir para o mês de renda atual</button>') + '</div>' +
+      '<div class="mnav"><button type="button" class="icon-btn" data-act="cycle-prev" aria-label="Mês de renda anterior">' + icon('left') + '</button>' +
+      '<button type="button" class="icon-btn" data-act="cycle-next" aria-label="Próximo mês de renda"' + (endM >= top ? ' disabled' : '') + '>' + icon('right') + '</button></div></header>' +
+      '<p class="cycle-note">' + esc(cover) + '</p><div class="cycle-meta">' + seal + '</div>';
+  }
+
   V.analises = function () {
-    const T = S.data.transactions;
     const n = S.ana.range;
-    const months = F.rangeMonths(S.month, n);
+    const byRenda = S.ana.by !== 'calendario';
+    const today = B.today();
+    const endM = byRenda ? B.anaCycle() : S.month;
+    const months = F.rangeMonths(endM, n);
+    // Por renda: os lançamentos são vistos por mês de renda (gasto conta quando é pago, a fatura no vencimento) e podem ser filtrados por renda.
+    let T = S.data.transactions, sum = null, st = null, src = '';
+    if (byRenda) {
+      const view = F.cycleView(T, S.data.cards);
+      sum = F.incomeSummary(view, months);
+      src = S.ana.src;
+      if (src && !(sum.fontes[src] && (sum.fontes[src].recebi > 0 || sum.fontes[src].gastei > 0))) src = '';
+      T = src ? view.filter((t) => (F.SOURCES.some((s) => s.key === t.source) ? t.source : 'outra') === src) : view;
+      st = F.cycleStatus(months, today);
+    }
     const set = new Set(months);
     const exp = T.filter((t) => !t.skipped && t.kind === 'despesa' && set.has(t.month));
     const inc = T.filter((t) => !t.skipped && t.kind === 'receita' && set.has(t.month));
@@ -283,34 +325,87 @@
     const cards = F.byCard(T, months);
     const fixed = exp.filter((t) => t.recurring_id).reduce((s, t) => s + F.toCents(t.amount), 0) / 100;
 
-    let html = monthHead();
+    let html = byRenda ? cycleHead(endM, months, st) : monthHead();
+    html += anaSwitch();
     html += '<div class="seg" role="group" aria-label="Período">' +
       [[1, 'Mês'], [3, '3 meses'], [6, '6 meses'], [12, '12 meses']].map(([v, l]) => '<button type="button" aria-pressed="' + (n === v) + '" data-act="set-range" data-v="' + v + '">' + l + '</button>').join('') + '</div>';
-    if (n > 1) html += '<p class="range-note">' + rangeLabel(months) + '</p>';
+    if (n > 1 && !byRenda) html += '<p class="range-note">' + rangeLabel(months) + '</p>';
 
-    if (!exp.length) {
-      return html + '<p class="empty-box">Sem despesas neste período. Lance gastos no Extrato e a análise aparece aqui.</p>';
+    // Por renda: filtro (somadas, só o salário, só o vale) com o que cada renda recebeu e gastou
+    if (byRenda) {
+      const used = F.SOURCES.filter((s) => sum.fontes[s.key].recebi > 0 || sum.fontes[s.key].gastei > 0);
+      if (used.length > 1) {
+        html += '<div class="seg" role="group" aria-label="Renda">' +
+          [{ key: '', name: 'Somadas' }].concat(used).map((s) => '<button type="button" aria-pressed="' + (src === s.key) + '" data-act="set-ana-src" data-v="' + s.key + '">' + esc(s.name) + '</button>').join('') + '</div>';
+      }
+    }
+
+    if (byRenda ? !exp.length && !inc.length : !exp.length) {
+      return html + '<p class="empty-box">' + (byRenda ? 'Nada neste mês de renda ainda. Lance entradas e gastos e a análise por renda aparece aqui.' : 'Sem despesas neste período. Lance gastos no Extrato e a análise aparece aqui.') + '</p>';
     }
 
     // Número principal e fatos rápidos
     const avgLabel = n === 1 ? 'Média por dia' : 'Média por mês';
-    const isCur = n === 1 && S.month === B.curMonth();
-    const days = isCur ? F.dayOf(B.today()) : F.daysInMonth(S.month);
-    const spentSoFar = isCur ? exp.filter((t) => t.date <= B.today()).reduce((s, t) => s + F.toCents(t.amount), 0) / 100 : total;
-    const avg = n === 1 ? spentSoFar / days : total / n;
-    html += '<section class="hero-block"><p class="lbl">Saiu no período</p><p class="hero' + (F.fmtNum(total).length > 10 ? ' long' : '') + '"><small>R$</small>' + F.fmtNum(total) + '</p>' +
-      '<dl class="trio"><div><dt>Entrou</dt><dd class="num">' + brl(totalIn) + '</dd></div>' +
-      '<div><dt>' + avgLabel + '</dt><dd class="num">' + brl(avg) + '</dd></div>' +
-      '<div><dt>Fixas</dt><dd class="num">' + brl(fixed) + '</dd></div></dl></section>';
+    let avg;
+    if (byRenda) {
+      const cd = F.cycleDates(endM);
+      const isCur = n === 1 && endM === F.cycleOf(today);
+      const days = isCur ? F.dayNumber(today) - F.dayNumber(cd.start) + 1 : F.dayNumber(cd.end) - F.dayNumber(cd.start) + 1;
+      const spentSoFar = isCur ? exp.filter((t) => t.payDate <= today).reduce((s, t) => s + F.toCents(t.amount), 0) / 100 : total;
+      avg = n === 1 ? spentSoFar / Math.max(days, 1) : total / n;
+    } else {
+      const isCur = n === 1 && S.month === B.curMonth();
+      const days = isCur ? F.dayOf(today) : F.daysInMonth(S.month);
+      const spentSoFar = isCur ? exp.filter((t) => t.date <= today).reduce((s, t) => s + F.toCents(t.amount), 0) / 100 : total;
+      avg = n === 1 ? spentSoFar / days : total / n;
+    }
+    if (byRenda) {
+      // Recebi, gastei e sobra da renda escolhida (ou das somadas)
+      const row = src ? sum.fontes[src] : sum.total;
+      const who = src
+        ? B.srcName(src) + (n === 1 ? ' de ' + F.monthName(endM).toLowerCase() : '')
+        : (n === 1 ? 'rendas de ' + F.monthName(endM).toLowerCase() : 'rendas somadas');
+      const neg = row.sobra < 0, sobraTxt = F.fmtNum(Math.abs(row.sobra));
+      html += '<section class="hero-block"><p class="lbl">' + (neg ? icon('alert', 'xs neg') + ' Faltou' : 'Sobra') + ' · ' + esc(who) + '</p>' +
+        '<p class="hero' + (sobraTxt.length > 10 ? ' long' : '') + (neg ? ' neg' : '') + '"><small>R$</small>' + sobraTxt + '</p>' +
+        '<dl class="trio"><div><dt>Recebi</dt><dd class="num">' + brl(row.recebi) + '</dd></div>' +
+        '<div><dt>Gastei</dt><dd class="num">' + brl(row.gastei) + '</dd></div>' +
+        '<div><dt>Falta pagar</dt><dd class="num">' + brl(row.faltaPagar) + '</dd></div></dl>' +
+        (row.faltaReceber > 0 ? '<p class="note">Inclui ' + brl(row.faltaReceber) + ' que ainda vão cair na conta.</p>' : '') +
+        '<p class="note">' + avgLabel + ' ' + brl(avg) + '. Fixas ' + brl(fixed) + '.</p></section>';
+    } else {
+      html += '<section class="hero-block"><p class="lbl">Saiu no período</p><p class="hero' + (F.fmtNum(total).length > 10 ? ' long' : '') + '"><small>R$</small>' + F.fmtNum(total) + '</p>' +
+        '<dl class="trio"><div><dt>Entrou</dt><dd class="num">' + brl(totalIn) + '</dd></div>' +
+        '<div><dt>' + avgLabel + '</dt><dd class="num">' + brl(avg) + '</dd></div>' +
+        '<div><dt>Fixas</dt><dd class="num">' + brl(fixed) + '</dd></div></dl></section>';
+    }
 
-    const ins = F.buildInsights({ txs: T, months, today: B.today(), catName: B.catName, cardName: B.cardName });
+    if (!exp.length) return html + '<p class="empty-box">Sem gastos nesta renda e neste período.</p>';
+
+    const ins = F.buildInsights({ txs: T, months, today, catName: B.catName, cardName: B.cardName, cycle: byRenda });
     html += '<div class="cols-2"><div class="col-a">';
+
+    if (byRenda) {
+      // Cada renda: recebi, gastei, sobra. Toque para ver só ela.
+      const usedSrc = F.SOURCES.filter((s) => sum.fontes[s.key].recebi > 0 || sum.fontes[s.key].gastei > 0);
+      html += '<section><h2>Por renda</h2><div class="envs">' + usedSrc.map((s) => {
+        const f = sum.fontes[s.key], over = f.sobra < 0;
+        const name = s.name + (n === 1 ? ' de ' + F.monthName(endM).toLowerCase() : '');
+        return '<div class="env pick' + (src === s.key ? ' on' : '') + '" role="button" tabindex="0" data-act="set-ana-src" data-v="' + s.key + '" aria-pressed="' + (src === s.key) + '">' +
+          '<div class="env-top"><span class="env-name">' + srcDot(s.key) + '<b>' + esc(name) + '</b></span>' +
+          '<span class="env-left' + (over ? ' neg' : '') + '">' + (over ? icon('alert', 'xs') + 'Passou ' + brl(-f.sobra) : 'Sobra ' + brl(f.sobra)) + '</span></div>' +
+          C.meter(f.gastei, f.recebi, B.srcVar(s.key)) +
+          '<p class="env-sub">' + (f.recebi > 0 ? 'Recebi ' + brl(f.recebi) + ', gastei ' + brl(f.gastei) : 'Gastei ' + brl(f.gastei) + ' sem entrada lançada') +
+          (f.faltaReceber > 0 ? '. Falta receber ' + brl(f.faltaReceber) : '') + '</p></div>';
+      }).join('') + '</div></section>';
+    }
 
     html += '<section><h2>Para onde foi o dinheiro</h2>' +
       C.ranked(cats.rows.map((r) => ({ label: B.catName(r.key), lead: '<span class="ico sm">' + B.cat(r.key).emoji + '</span>', value: r.total, pctText: (r.pct > 0 && r.pct < 0.005 ? '<1%' : Math.round(r.pct * 100) + '%') }))) + '</section>';
 
     html += '<section><h2>Evolução dos gastos</h2>' +
-      C.columns(F.monthlySeries(T, S.month, Math.max(6, n)).map((x) => ({ month: x.month, value: x.despesas })), S.month) + '</section>';
+      C.columns(F.monthlySeries(T, endM, Math.max(6, n)).map((x) => ({ month: x.month, value: x.despesas })), endM) +
+      (byRenda ? '<p class="when-note">Cada coluna é um mês de renda, do dia 15 ao dia 14.</p>' : '') + '</section>';
 
     // Quando você gasta: dia da semana e parte do mês (só saídas com data até hoje)
     const when = F.spendingWhen(T, months, B.today());
@@ -354,10 +449,12 @@
     for (const s of F.SOURCES) fontes[s.key] = 0;
     for (const t of exp) fontes[t.source in fontes ? t.source : 'outra'] += F.toCents(t.amount) / 100;
     const srcParts = F.SOURCES.filter((s) => fontes[s.key] > 0);
-    html += '<section><h2>De onde saiu o dinheiro</h2>' +
-      C.segBar(srcParts.map((s) => ({ label: s.name, value: fontes[s.key], color: B.srcVar(s.key) }))) +
-      '<ul class="legend">' + srcParts.map((s) => '<li>' + srcDot(s.key) + '<span>' + s.name + '</span><b class="num">' + brl(fontes[s.key]) + '</b><span class="num pct">' + Math.round((fontes[s.key] / total) * 100) + '%</span></li>').join('') + '</ul>' +
-      '<p class="muted-text sm-gap">Fixas ' + R(fixed) + ' &nbsp;e&nbsp; variáveis ' + R(total - fixed) + '</p></section>';
+    if (!byRenda) {
+      html += '<section><h2>De onde saiu o dinheiro</h2>' +
+        C.segBar(srcParts.map((s) => ({ label: s.name, value: fontes[s.key], color: B.srcVar(s.key) }))) +
+        '<ul class="legend">' + srcParts.map((s) => '<li>' + srcDot(s.key) + '<span>' + s.name + '</span><b class="num">' + brl(fontes[s.key]) + '</b><span class="num pct">' + Math.round((fontes[s.key] / total) * 100) + '%</span></li>').join('') + '</ul>' +
+        '<p class="muted-text sm-gap">Fixas ' + R(fixed) + ' &nbsp;e&nbsp; variáveis ' + R(total - fixed) + '</p></section>';
+    }
 
     html += '<section><h2>Por cartão</h2>' +
       C.ranked(cards.rows.map((r) => ({ label: B.cardName(r.key), lead: '<i class="dot lg" style="--c:' + esc(B.cardColor(r.key === '_dinheiro' ? null : r.key)) + '"></i>', value: r.total, pctText: Math.round(r.pct * 100) + '%' }))) + '</section>';
@@ -500,6 +597,11 @@
   };
   A['set-kind-filter'] = (el) => { S.f.kind = el.dataset.v; B.render(); };
   A['set-range'] = (el) => { S.ana.range = +el.dataset.v; B.render(); };
+  A['set-ana-by'] = (el) => { S.ana.by = el.dataset.v === 'calendario' ? 'calendario' : 'renda'; B.render(); };
+  A['set-ana-src'] = (el) => { S.ana.src = el.dataset.v === S.ana.src ? '' : el.dataset.v; B.render(); };
+  A['cycle-prev'] = () => B.setCycle(F.addMonths(B.anaCycle(), -1));
+  A['cycle-next'] = () => B.setCycle(F.addMonths(B.anaCycle(), 1));
+  A['cycle-today'] = () => B.setCycle(F.cycleOf(B.today()));
   A['toggle-paid'] = (el) => B.guard(async () => {
     const t = B.findTx(el.dataset.id);
     await B.updTx(t.id, { paid: !t.paid });

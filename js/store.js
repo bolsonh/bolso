@@ -202,12 +202,18 @@
           if (error) throw friendlyError(error);
           return data.session;
         },
-        async signUp(email, password) {
+        async signUp(email, password, consent) {
+          // consent: { aceite_termos, aceite_em } fica guardado nos dados do usuário como registro do aceite
           const { data, error } = await client.auth.signUp({
-            email, password, options: { emailRedirectTo: root.location.origin + root.location.pathname },
+            email, password, options: { emailRedirectTo: root.location.origin + root.location.pathname, data: consent || {} },
           });
           if (error) throw friendlyError(error);
           return data; // data.session vem vazio quando o projeto exige confirmar o e-mail
+        },
+        async acceptTerms(consent) {
+          const { data, error } = await client.auth.updateUser({ data: consent });
+          if (error) throw friendlyError(error);
+          return data.user;
         },
         async signOut() { await client.auth.signOut(); },
         async resetPassword(email) {

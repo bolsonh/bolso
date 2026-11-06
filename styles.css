@@ -389,3 +389,9 @@ body:has(dialog[open]) { overflow: hidden; }
 .btn.primary:hover { filter: brightness(1.08); }
 .side .btn.primary { background: #dff3e7; color: #0f3d2c; border-color: #dff3e7; }
 .auth { padding: 28px 24px 24px; background: var(--surface); border: 1px solid var(--line); border-radius: 22px; box-shadow: var(--shadow); }
+
+/* ---------- Análises: dia da semana e parte do mês ---------- */
+.when-lead { margin: -2px 0 8px; font-weight: 600; }
+.when-few { display: flex; align-items: flex-start; gap: 8px; margin: 6px 0 4px; font-size: 13px; color: var(--ink2); }
+.when-few .ic { flex: none; margin-top: 1px; }
+.when-note { margin: 8px 0 12px; font-size: 12px; color: var(--ink2); }

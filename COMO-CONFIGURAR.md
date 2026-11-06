@@ -66,6 +66,12 @@ Sem isso, o link do e-mail de confirmação e o de "esqueci a senha" não voltam
 No aparelho onde você já lançou coisas (modo local): **Mais > Dados e backup > Baixar backup completo**.
 Depois, já logado no app com Supabase: **Restaurar de um backup** e escolha o arquivo.
 
+## Atualizar um banco que já existe
+
+Quando uma versão nova do app precisa de colunas novas, ela vem com um arquivo em `supabase/` (por exemplo `migracao-02-fatura.sql`).
+Cole o arquivo no **SQL Editor** do Supabase e clique em **Run**. Ele só acrescenta, não apaga nem altera nenhum dado, e pode ser rodado de novo sem problema.
+Quem criar o banco do zero com `schema.sql` já recebe tudo.
+
 ## Cuidados
 
 - **Pausa por inatividade:** no plano gratuito, o Supabase pausa o projeto depois de cerca de uma semana sem uso. Usar o app já conta como atividade; se pausar, reative pelo painel do Supabase e não deixe parado por muito tempo. Por isso vale baixar o backup de vez em quando.

@@ -379,6 +379,76 @@
     });
   }
 
+  /* ---------- Mês de renda: de um dia 15 até o dia 14 do mês seguinte (#15) ---------- */
+
+  const CYCLE_FIRST_DAY = 15;
+
+  /** O mês de renda M vai de 15/M até 14/(M+1): o vale chega dia 15, o salário dia 30 e sustenta até o dia 14.
+      Cada renda leva o nome do mês em que é recebida. Devolve o mês de renda (AAAA-MM) a que uma data pertence. */
+  function cycleOf(dateStr) {
+    const ym = monthOf(dateStr);
+    return dayOf(dateStr) >= CYCLE_FIRST_DAY ? ym : addMonths(ym, -1);
+  }
+
+  /** Primeiro e último dia do mês de renda. */
+  function cycleDates(month) {
+    return { start: dateIn(month, CYCLE_FIRST_DAY), end: dateIn(addMonths(month, 1), CYCLE_FIRST_DAY - 1) };
+  }
+
+  /** Dia em que a despesa de fato sai do bolso: no cartão com fatura é o vencimento da fatura; no resto, a data do lançamento. */
+  function payDate(t, cardsById) {
+    if (t.kind === 'despesa' && t.card_id && cardsById) {
+      const card = cardsById.get(t.card_id);
+      if (isBilled(card)) return invoiceDates(card, t.month).dueDate;
+    }
+    return t.date;
+  }
+
+  /** Os lançamentos vistos por mês de renda: cada um com month = mês de renda do dia do pagamento (e payDate).
+      Gasto conta quando é pago, então a fatura entra no vencimento. Lançamentos pulados ficam de fora. */
+  function cycleView(txs, cards) {
+    const byId = new Map((cards || []).map((c) => [c.id, c]));
+    const out = [];
+    for (const t of txs) {
+      if (t.skipped) continue;
+      const pd = payDate(t, byId);
+      out.push(Object.assign({}, t, { month: cycleOf(pd), payDate: pd }));
+    }
+    return out;
+  }
+
+  /** Situação da medição de um ou mais meses de renda (months em ordem, do mais antigo ao mais novo).
+      É parcial enquanto o último período não terminou: débito, Pix e dinheiro continuam entrando até o dia 14, e uma fatura
+      que vence dentro do período já fechou antes do vencimento, então só falta o período acabar. Depois disso, mês fechado. */
+  function cycleStatus(months, today) {
+    const start = cycleDates(months[0]).start, end = cycleDates(months[months.length - 1]).end;
+    return { start, end, closed: today > end, started: today >= start };
+  }
+
+  /** Recebi, gastei e sobra de cada renda nos meses de renda indicados, e o total. view vem de cycleView. */
+  function incomeSummary(view, months) {
+    const set = new Set(months);
+    const raw = {};
+    for (const s of SOURCES) raw[s.key] = { recebi: 0, gastei: 0, faltaReceber: 0, faltaPagar: 0 };
+    for (const t of view) {
+      if (t.skipped || !set.has(t.month)) continue;
+      const f = raw[t.source] || raw.outra;
+      const c = toCents(t.amount);
+      if (t.kind === 'receita') { f.recebi += c; if (!t.paid) f.faltaReceber += c; }
+      else { f.gastei += c; if (!t.paid) f.faltaPagar += c; }
+    }
+    const fontes = {}, tot = { recebi: 0, gastei: 0, faltaReceber: 0, faltaPagar: 0 };
+    for (const k of Object.keys(raw)) {
+      const f = raw[k];
+      for (const key of Object.keys(tot)) tot[key] += f[key];
+      fontes[k] = { recebi: f.recebi / 100, gastei: f.gastei / 100, faltaReceber: f.faltaReceber / 100, faltaPagar: f.faltaPagar / 100, sobra: (f.recebi - f.gastei) / 100 };
+    }
+    return {
+      fontes,
+      total: { recebi: tot.recebi / 100, gastei: tot.gastei / 100, faltaReceber: tot.faltaReceber / 100, faltaPagar: tot.faltaPagar / 100, sobra: (tot.recebi - tot.gastei) / 100 },
+    };
+  }
+
   /* ---------- Quando você gasta: dia da semana e parte do mês ---------- */
 
   const WEEKDAY_ROWS = [ // índice = Date#getDay (0 = domingo)
@@ -449,7 +519,10 @@
 
   function buildInsights(o) {
     const { txs, months, today, catName, cardName } = o;
-    const curMonth = monthOf(today);
+    // Com cycle, os meses são meses de renda (15 a 14) e as datas são as do pagamento (txs vem de cycleView).
+    const cyc = !!o.cycle;
+    const curMonth = cyc ? cycleOf(today) : monthOf(today);
+    const dateOf = (t) => (cyc ? t.payDate || t.date : t.date);
     const set = new Set(months);
     const exp = expensesIn(txs, set);
     const out = [];
@@ -465,8 +538,16 @@
     const last = months[n - 1];
     const prevMonths = rangeMonths(addMonths(months[0], -1), n);
     let nowVal = total, prevVal = 0, prefix = 'Você gastou';
-    let label = n === 1 ? 'no mês anterior' : 'no período anterior';
-    if (n === 1 && last === curMonth) {
+    let label = n === 1 ? (cyc ? 'no mês de renda anterior' : 'no mês anterior') : 'no período anterior';
+    if (n === 1 && last === curMonth && cyc) {
+      // até o mesmo ponto do período: quantos dias já se passaram desde o dia 15
+      const k = dayNumber(today) - dayNumber(cycleDates(last).start);
+      const pStart = dayNumber(cycleDates(prevMonths[0]).start);
+      nowVal = exp.filter((t) => dateOf(t) <= today).reduce((s, t) => s + toCents(t.amount), 0) / 100;
+      prevVal = expensesIn(txs, new Set(prevMonths)).filter((t) => dayNumber(dateOf(t)) - pStart <= k).reduce((s, t) => s + toCents(t.amount), 0) / 100;
+      prefix = 'Até hoje você gastou';
+      label = 'no mesmo ponto do mês de renda anterior';
+    } else if (n === 1 && last === curMonth) {
       const day = dayOf(today);
       nowVal = exp.filter((t) => dayOf(t.date) <= day && t.date <= today).reduce((s, t) => s + toCents(t.amount), 0) / 100;
       prevVal = expensesIn(txs, new Set(prevMonths)).filter((t) => dayOf(t.date) <= day).reduce((s, t) => s + toCents(t.amount), 0) / 100;
@@ -496,8 +577,10 @@
     // Média
     if (n === 1) {
       const isCur = last === curMonth;
-      const spent = isCur ? exp.filter((t) => t.date <= today).reduce((s, t) => s + toCents(t.amount), 0) / 100 : total;
-      const days = isCur ? dayOf(today) : daysInMonth(last);
+      const spent = isCur ? exp.filter((t) => dateOf(t) <= today).reduce((s, t) => s + toCents(t.amount), 0) / 100 : total;
+      let days;
+      if (cyc) { const cd = cycleDates(last); days = isCur ? dayNumber(today) - dayNumber(cd.start) + 1 : dayNumber(cd.end) - dayNumber(cd.start) + 1; }
+      else days = isCur ? dayOf(today) : daysInMonth(last);
       if (spent > 0 && days > 0) out.push({ tone: 'info', text: 'Em média, ' + fmtBRL(spent / days) + ' por dia' + (isCur ? ' até agora.' : '.') });
     } else {
       out.push({ tone: 'info', text: 'Média de ' + fmtBRL(total / n) + ' por mês no período.' });
@@ -550,6 +633,7 @@
     monthLabel, monthName, monthShort, dayLabel, uid,
     categoryInfo, instanceOf, missingRecurring, buildInstallments,
     isBilled, invoiceOf, invoiceDates, placeOnInvoice, invoices, incomeOptions, suggestPaySource, chargeDate, dayInt,
+    cycleOf, cycleDates, payDate, cycleView, cycleStatus, incomeSummary, dayNumber,
     live, summarize, rankBy, byCategory, byCard, monthlySeries, spendingWhen, dowOf, buildInsights, toCSV,
   };
 

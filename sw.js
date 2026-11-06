@@ -3,7 +3,7 @@
    Biblioteca do Supabase: usa a cópia guardada. As chamadas ao banco nunca são guardadas. */
 const VERSION = 'bolso-v1';
 const SHELL = [
-  './', './index.html', './styles.css', './config.js', './manifest.webmanifest',
+  './', './index.html', './privacidade.html', './styles.css', './config.js', './manifest.webmanifest',
   './js/domain.js', './js/charts.js', './js/store.js', './js/app-core.js', './js/views.js', './js/sheets.js', './js/boot.js',
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png',
 ];

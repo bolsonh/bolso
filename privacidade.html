@@ -2,6 +2,7 @@
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'self'; form-action 'none'; object-src 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Privacidade e termos de uso, Bolso</title>
   <meta name="description" content="Como o Bolso trata os seus dados e as regras de uso do app.">
@@ -126,21 +127,6 @@
 
   <script src="config.js"></script>
   <script src="js/domain.js"></script>
-  <script>
-    (function () {
-      var cfg = window.APP_CONFIG || {};
-      var v = window.Fin && window.Fin.TERMS_VERSION;
-      if (v) document.getElementById('versao').textContent = v;
-      var mail = String(cfg.CONTACT_EMAIL || '').trim();
-      if (/^\S+@\S+\.\S+$/.test(mail)) {
-        document.querySelectorAll('.contato').forEach(function (el) {
-          var a = document.createElement('a');
-          a.href = 'mailto:' + mail;
-          a.textContent = mail;
-          el.replaceWith(a);
-        });
-      }
-    })();
-  </script>
+  <script src="js/privacidade.js"></script>
 </body>
 </html>

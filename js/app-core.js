@@ -33,10 +33,10 @@
     cards: ['id', 'name', 'kind', 'color', 'closing_day', 'due_day', 'pay_source'],
     categories: ['id', 'name', 'emoji'],
     recurring: ['id', 'kind', 'description', 'amount', 'day', 'category', 'card_id', 'source', 'month_offset', 'start_month', 'active'],
-    transactions: ['id', 'kind', 'description', 'amount', 'date', 'month', 'category', 'card_id', 'source', 'paid', 'skipped', 'recurring_id', 'group_id', 'installment_no', 'installments_total', 'created_at'],
+    transactions: ['id', 'kind', 'description', 'amount', 'date', 'month', 'category', 'card_id', 'source', 'paid', 'skipped', 'recurring_id', 'group_id', 'installment_no', 'installments_total', 'tag', 'created_at'],
   };
-  // Colunas novas (fatura do cartão): só seguem para o banco quando têm valor, assim cartões antigos gravam igual a antes.
-  const OPTIONAL = { cards: ['closing_day', 'due_day', 'pay_source'], transactions: ['created_at'] };
+  // Colunas novas (fatura do cartão, etiqueta): só seguem para o banco quando têm valor, assim cartões antigos gravam igual a antes.
+  const OPTIONAL = { cards: ['closing_day', 'due_day', 'pay_source'], transactions: ['created_at', 'tag'] };
   const pick = (table, row) => {
     const o = {};
     for (const c of COLS[table]) {

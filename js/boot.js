@@ -47,6 +47,7 @@
       '<form id="auth-form" novalidate>' +
       (needsEmail ? '<label class="field"><span>E-mail</span><input id="a-email" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false"></label>' : '') +
       (needsPass ? '<label class="field"><span>' + (mode === 'newpw' ? 'Senha nova' : 'Senha') + '</span><input id="a-pass" type="password" autocomplete="' + (mode === 'in' ? 'current-password' : 'new-password') + '"></label>' : '') +
+      (mode === 'up' || mode === 'newpw' ? '<p class="hint">Pelo menos 8 caracteres, com letras e números.</p>' : '') +
       (mode === 'up' ? consentRow : '') +
       '<p class="form-err" id="a-err" role="alert"></p>' +
       (info ? '<p class="callout">' + esc(info) + '</p>' : '') +
@@ -64,7 +65,10 @@
     const pass = B.$('#a-pass') ? B.$('#a-pass').value : '';
     err.textContent = '';
     if (authMode !== 'newpw' && !/^\S+@\S+\.\S+$/.test(email)) { err.textContent = 'Digite um e-mail válido.'; B.$('#a-email').focus(); return; }
-    if (authMode !== 'reset' && pass.length < 6) { err.textContent = 'A senha precisa ter pelo menos 6 caracteres.'; B.$('#a-pass').focus(); return; }
+    if (authMode === 'in' && !pass) { err.textContent = 'Digite a sua senha.'; B.$('#a-pass').focus(); return; }
+    // regra de senha só ao criar ou trocar: quem já tem senha antiga continua entrando
+    const weak = authMode === 'up' || authMode === 'newpw' ? F.passwordProblem(pass) : '';
+    if (weak) { err.textContent = weak; B.$('#a-pass').focus(); return; }
     if (authMode === 'up' && !B.$('#a-terms').checked) { err.textContent = 'Marque a caixa para aceitar a política de privacidade e os termos de uso.'; B.$('#a-terms').focus(); return; }
     go.disabled = true;
     try {
@@ -93,7 +97,7 @@
 
   function onAuthEvent(event, session) {
     if (event === 'PASSWORD_RECOVERY') { recovery = true; authView('newpw'); return; }
-    if (event === 'SIGNED_OUT') { S.user = null; S.data = { cards: [], categories: [], recurring: [], transactions: [] }; recovery = false; authView('in'); return; }
+    if (event === 'SIGNED_OUT') { S.user = null; S.data = { cards: [], categories: [], recurring: [], transactions: [] }; S.sharedCards = {}; recovery = false; authView('in'); return; }
     if (event === 'SIGNED_IN' && session && doc.body.dataset.state !== 'app' && !recovery && !awaitingTerms) {
       setTimeout(() => startApp(session), 0); // fora do callback, como a biblioteca recomenda
     }
@@ -152,6 +156,8 @@
 
   /* ---------- Eventos globais ---------- */
 
+  const inFlight = new Set();
+
   function bind() {
     doc.addEventListener('click', (e) => {
       const a = e.target.closest('[data-auth]');
@@ -159,7 +165,17 @@
       const el = e.target.closest('[data-act]');
       if (!el) return;
       const fn = B.acts[el.dataset.act];
-      if (fn) { e.preventDefault(); fn(el, e); }
+      if (!fn) return;
+      e.preventDefault();
+      // Toque repetido enquanto a mesma ação ainda grava (rede lenta) é ignorado; ações instantâneas não travam.
+      const key = [el.dataset.act, el.dataset.id, el.dataset.key, el.dataset.card, el.dataset.month, el.dataset.v].join('|');
+      if (inFlight.has(key)) return;
+      const r = fn(el, e);
+      if (r && typeof r.then === 'function') {
+        inFlight.add(key);
+        const free = () => inFlight.delete(key);
+        r.then(free, free);
+      }
     });
     doc.addEventListener('keydown', (e) => {
       if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('[role="button"][data-act]')) { e.preventDefault(); e.target.click(); }
@@ -175,10 +191,11 @@
         const file = el.files[0];
         el.value = '';
         B.guard(async () => {
+          if (file.size > B.IMPORT_MAX_BYTES) throw new Error('Esse arquivo é grande demais para ser um backup do Bolso (o limite é 5 MB).');
           const added = await B.importJSON(await file.text());
           await B.ensureRecurring(S.month);
           B.render();
-          B.toast('Backup restaurado: ' + added.transactions + ' lançamentos, ' + added.cards + ' cartões, ' + added.recurring + ' contas fixas.');
+          B.toast('Backup restaurado: ' + added.transactions + ' lançamentos, ' + added.cards + ' cartões, ' + added.recurring + ' contas fixas.' + (added.skipped ? ' ' + added.skipped + (added.skipped === 1 ? ' linha foi ignorada' : ' linhas foram ignoradas') + ' por estar fora do formato.' : ''));
         });
       }
     });
@@ -210,6 +227,15 @@
   /* ---------- Partida ---------- */
 
   async function boot() {
+    // Clickjacking: a CSP por <meta> não aceita frame-ancestors (o GitHub Pages não deixa mandar cabeçalhos), então o app se recusa a rodar dentro de moldura de outro site.
+    let framed = false;
+    try { framed = root.top !== root.self; } catch (e) { framed = true; }
+    if (framed) {
+      setState('fatal');
+      B.$('#view').innerHTML = '<div class="auth">' + MARK + '<h1>Abra o Bolso direto</h1><p class="callout">Por segurança, o Bolso não abre dentro de outra página.</p>' +
+        '<div class="stack"><a class="btn primary" href="' + esc(root.location.href.split('#')[0]) + '" target="_blank" rel="noopener">Abrir o Bolso</a></div></div>';
+      return;
+    }
     bind();
     B.wireSheets();
     setState('loading');

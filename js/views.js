@@ -29,6 +29,8 @@
     chev: '<path d="m9 6 6 6-6 6"/>',
     layers: '<path d="M12 3 3 8l9 5 9-5z"/><path d="m3 13 9 5 9-5"/>',
     bookmark: '<path d="M6 3h12v18l-6-4-6 4z"/>',
+    link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+    users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.4 3.2-5 6.5-5s5.7 1.6 6.5 5"/><circle cx="17.5" cy="9" r="2.5"/><path d="M17 14.5c2.5.1 4 1.5 4.5 4"/>',
   };
   const icon = (n, cls) => '<svg class="ic ' + (cls || '') + '" viewBox="0 0 24 24" aria-hidden="true">' + ICON[n] + '</svg>';
   B.icon = icon;
@@ -62,6 +64,17 @@
 
   /* ---------- Linha de lançamento (Extrato e Resumo) ---------- */
 
+  /** "Tainã deve R$ 30,00" / "Esperando a Tainã aceitar" / "Tainã pagou R$ 30,00": a situação da parte da outra pessoa. */
+  function splitChip(t) {
+    const who = F.tagClean(t.split_with), v = brlN(F.othersCents(t) / 100);
+    const x = B.ownShare(t.id);
+    let text = who + ' deve ' + v;
+    if (t.split_paid) text = who + ' pagou ' + v;
+    else if (x && x.status === 'pending') text = 'Esperando ' + who + ' aceitar ' + v;
+    else if (x && x.status === 'accepted' && x.partner_paid) text = who + ' avisou que pagou ' + v;
+    return '<span class="chip split-chip">' + icon('users', 'xs') + '<span>' + esc(text) + '</span></span>';
+  }
+
   function txRow(t, o) {
     o = o || {};
     const isIn = t.kind === 'receita';
@@ -73,6 +86,7 @@
     if (t.recurring_id) chips.push('<span class="chip">' + icon('repeat', 'xs') + 'Fixa</span>');
     if (t.installments_total) chips.push('<span class="chip">' + t.installment_no + '/' + t.installments_total + '</span>');
     if (t.tag && !isIn && !o.noTag) chips.push('<span class="chip tag-chip" title="' + esc(t.tag) + '">' + icon('bookmark', 'xs') + '<span>' + esc(t.tag) + '</span></span>');
+    if (!isIn && F.hasSplit(t)) chips.push(splitChip(t));
     if (isIn && t.month !== F.monthOf(t.date)) chips.push('<span class="chip">Vale para ' + F.monthName(t.month).toLowerCase() + '</span>');
     const label = t.skipped ? 'Pulada' : t.paid ? (isIn ? 'Recebido' : 'Pago') : (isIn ? 'A receber' : 'Pendente');
     const pillAct = t.skipped ? 'toggle-skip' : 'toggle-paid';
@@ -109,6 +123,7 @@
     const chips = ['<span class="chip">' + F.pad(F.dayOf(t.date)) + '/' + t.date.slice(5, 7) + '</span>'];
     if (t.recurring_id) chips.push('<span class="chip">' + icon('repeat', 'xs') + 'Fixa</span>');
     if (t.installments_total) chips.push('<span class="chip">' + t.installment_no + '/' + t.installments_total + '</span>');
+    if (F.hasSplit(t)) chips.push(splitChip(t));
     return '<div class="tx" role="button" tabindex="0" data-act="edit-tx" data-id="' + t.id + '">' +
       '<span class="ico">' + cat.emoji + '</span>' +
       '<span class="tx-main"><span class="tx-desc">' + esc(t.description) + '</span><span class="tx-meta">' + chips.join('') + '</span></span>' +
@@ -121,6 +136,66 @@
   function carryNote(amount, label, provisional) {
     return '<p class="note">' + label + ': <b class="' + (amount < 0 ? 'neg' : '') + '">' + (amount < 0 ? '\u2212' : '+') + '\u00a0' + brl(Math.abs(amount)).replace(' ', '\u00a0') + '</b>' +
       (provisional ? ' (previsto)' : '') + '. Já está no valor de cima.</p>';
+  }
+
+  const dmShort = (dateStr) => F.pad(F.dayOf(dateStr)) + '/' + dateStr.slice(5, 7);
+
+  /** Pedido de divisão (uma ou mais parcelas da mesma compra) esperando você aceitar ou recusar. */
+  function requestItem(g, P) {
+    const f = g.first, last = g.items[g.items.length - 1];
+    const card = f.card_name === F.CASH_NAME ? '' : ' no cartão <b>' + esc(f.card_name) + '</b>';
+    const what = g.count > 1
+      ? '<b>' + esc(P.name) + '</b> colocou <b>' + plural(g.count, 'parcela', 'parcelas') + ' de ' + brlN(f.amount) + '</b> para você pagar' + card + '. A primeira vence em ' + dmShort(f.date) + ' e a última em ' + dmShort(last.date) + ' (total de ' + brlN(g.total) + ').'
+      : '<b>' + esc(P.name) + '</b> colocou <b>' + brlN(f.amount) + '</b> para você pagar' + card + '. Vence em ' + dmShort(f.date) + '.';
+    return '<li class="req"><div class="req-top"><b class="req-desc">' + esc(f.description) + '</b><b class="num req-amt">' + brlN(g.total) + '</b></div>' +
+      '<p class="req-meta">' + what + '</p>' +
+      (g.changed ? '<p class="req-changed">' + icon('alert', 'xs') + esc(P.name) + ' alterou este pedido' + (g.prevTotal != null ? '. Antes era ' + brlN(g.prevTotal) : '') + '.</p>' : '') +
+      '<div class="req-actions"><button type="button" class="btn small primary" data-act="req-accept" data-key="' + esc(g.key) + '">Aceitar</button>' +
+      '<button type="button" class="btn small" data-act="req-refuse" data-key="' + esc(g.key) + '">Recusar</button></div></li>';
+  }
+  function noticeItem(n, P) {
+    const f = n.first, what = '"' + esc(f.description) + '" (' + brlN(n.total) + ')';
+    const text = n.kind === 'refused'
+      ? '<b>' + esc(P.name) + '</b> recusou dividir ' + what + '. A conta voltou a ser toda sua.'
+      : '<b>' + esc(P.name) + '</b> cancelou a divisão de ' + what + '. Ela saiu das suas contas.';
+    return '<li class="req"><p class="req-meta">' + text + '</p><div class="req-actions"><button type="button" class="btn small" data-act="notice-ok" data-key="' + esc(n.key) + '">Entendi</button></div></li>';
+  }
+  /** Convite, pedidos e avisos da divisão: ficam no alto do Resumo porque esperam uma resposta sua. */
+  function shareTop() {
+    if (S.store.mode !== 'supabase') return '';
+    const P = B.partner(), reqs = B.requestsForMe(), notes = B.noticesForMe();
+    let h = '';
+    if (P.state === 'received') {
+      h += '<section><h2>Convite</h2><p class="muted-text"><b>' + esc(P.name) + '</b> quer dividir contas com você. Aceitando, vocês dois podem mandar pedidos de divisão um para o outro. Ninguém vê os lançamentos do outro, só o que for dividido.</p>' +
+        '<div class="req-actions"><button type="button" class="btn small primary" data-act="go" data-to="mais/parceiro">Ver convite</button></div></section>';
+    }
+    if (reqs.length) h += '<section><h2>Divisão esperando você</h2><ul class="req-list">' + reqs.map((g) => requestItem(g, P)).join('') + '</ul></section>';
+    if (notes.length) h += '<section><h2>Avisos</h2><ul class="req-list">' + notes.map((n) => noticeItem(n, P)).join('') + '</ul></section>';
+    return h;
+  }
+  /** O que outras pessoas devolvem a você, por pessoa. "Recebi" confirma e cria a entrada. */
+  function receivableBlock() {
+    const recs = B.receivables(), wait = B.waitingAccept();
+    if (!recs.length && !wait.count) return '';
+    const P = B.partner();
+    let h = '<section><h2>A receber de outras pessoas</h2>';
+    h += recs.map((p) => '<div class="recv"><div class="recv-head"><b>' + esc(p.name) + '</b><b class="num">' + brlN(p.cents / 100) + '</b></div><ul class="recv-items">' +
+      p.items.map((t) => {
+        const x = B.ownShare(t.id);
+        const info = x && x.partner_paid ? '<span class="due-when ok">' + icon('check', 'xs') + esc(p.name) + ' avisou que pagou</span>'
+          : '<span class="due-when">' + (x ? 'Vence em ' + dmShort(x.date) + '. Esperando ' + esc(p.name) + ' pagar' : 'Compra de ' + dmShort(t.date)) + '</span>';
+        return '<li class="recv-item"><div class="recv-main" role="button" tabindex="0" data-act="edit-tx" data-id="' + t.id + '"><span class="due-desc">' + esc(t.description) + '</span>' + info + '</div>' +
+          '<b class="num due-amt">' + brlN(F.othersCents(t) / 100) + '</b>' +
+          '<button type="button" class="btn small" data-act="recv" data-id="' + t.id + '">Recebi</button></li>';
+      }).join('') + '</ul>' +
+      (p.items.length > 1 ? '<button type="button" class="btn small wide-sm" data-act="recv-all" data-key="' + esc(p.key) + '">Recebi tudo de ' + esc(p.name) + '</button>' : '') + '</div>').join('');
+    if (wait.count) h += '<p class="note">Esperando ' + esc(P.name) + ' aceitar ' + plural(wait.count, 'pedido', 'pedidos') + ' (' + brlN(wait.cents / 100) + ').</p>';
+    return h + '</section>';
+  }
+  /** Aviso sob o ranking por nicho: nele só entra a sua parte das contas divididas. */
+  function ownShareNote(list) {
+    const c = F.othersTotal(list);
+    return c > 0 ? '<p class="note">Aqui entra só a sua parte. ' + brlN(c / 100) + ' de contas divididas é das outras pessoas.</p>' : '';
   }
 
   V.resumo = function () {
@@ -143,6 +218,7 @@
         '</div></section>';
     }
 
+    html += shareTop();
     html += '<div class="cols-2"><div class="col-a">';
 
     html += '<section class="hero-block"><p class="lbl">' + (neg ? icon('alert', 'xs neg') + ' Falta no mês' : 'Sobra do mês') + '</p>' +
@@ -195,11 +271,13 @@
     }
     html += '</section>';
 
+    html += receivableBlock();
+
     // Para onde foi
     const cats = F.byCategory(T, [m]);
     html += '<section><div class="sec-head"><h2>Para onde foi</h2>' + (cats.rows.length ? '<button type="button" class="link-btn" data-act="go" data-to="analises">Análise completa</button>' : '') + '</div>';
     if (!cats.rows.length) html += '<p class="empty-line">Sem despesas neste mês.</p>';
-    else html += C.ranked(cats.rows.slice(0, 5).map((r) => ({ label: B.catName(r.key), lead: '<span class="ico sm">' + B.cat(r.key).emoji + '</span>', value: r.total, pctText: Math.round(r.pct * 100) + '%' })));
+    else html += C.ranked(cats.rows.slice(0, 5).map((r) => ({ label: B.catName(r.key), lead: '<span class="ico sm">' + B.cat(r.key).emoji + '</span>', value: r.total, pctText: Math.round(r.pct * 100) + '%' }))) + ownShareNote(T.filter((t) => t.kind === 'despesa' && t.month === m));
     html += '</section>';
 
     // Parcelas em andamento (todas as compras parceladas, de todos os cartões)
@@ -438,7 +516,7 @@
     }
 
     html += '<section><h2>Para onde foi o dinheiro</h2>' +
-      C.ranked(cats.rows.map((r) => ({ label: B.catName(r.key), lead: '<span class="ico sm">' + B.cat(r.key).emoji + '</span>', value: r.total, pctText: (r.pct > 0 && r.pct < 0.005 ? '<1%' : Math.round(r.pct * 100) + '%') }))) + '</section>';
+      C.ranked(cats.rows.map((r) => ({ label: B.catName(r.key), lead: '<span class="ico sm">' + B.cat(r.key).emoji + '</span>', value: r.total, pctText: (r.pct > 0 && r.pct < 0.005 ? '<1%' : Math.round(r.pct * 100) + '%') }))) + ownShareNote(exp) + '</section>';
 
     html += '<section><h2>Evolução dos gastos</h2>' +
       C.columns(F.monthlySeries(T, endM, Math.max(6, n)).map((x) => ({ month: x.month, value: x.despesas })), endM) +
@@ -524,6 +602,7 @@
       item('mais/cartoes', 'card', 'Cartões', S.data.cards.length ? S.data.cards.length + (S.data.cards.length === 1 ? ' cartão' : ' cartões') : 'Cadastre os cartões que você usa') +
       item('mais/nichos', 'tag', 'Nichos', F.CATEGORIES.length + ' padrão' + (S.data.categories.length ? ' e ' + S.data.categories.length + ' seus' : '')) +
       item('mais/etiquetas', 'bookmark', 'Etiquetas', etiquetasSub()) +
+      (local ? '' : item('mais/parceiro', 'users', 'Dividir contas', parceiroSub())) +
       item('mais/dados', 'data', 'Dados e backup', 'Exportar, importar e apagar') +
       '<a class="list-item" href="privacidade.html" target="_blank" rel="noopener"><span class="ico">' + icon('info') + '</span><span class="li-text"><b>Privacidade e termos</b><small>Como tratamos os seus dados</small></span>' + icon('chev', 'end') + '</a></div>';
 
@@ -710,6 +789,49 @@
     return html;
   };
 
+  function parceiroSub() {
+    if (!B.socialReady()) return 'Falta atualizar o banco';
+    const P = B.partner();
+    if (P.state === 'linked') return 'Vinculado com ' + P.name;
+    if (P.state === 'sent') return 'Convite enviado, esperando aceitar';
+    if (P.state === 'received') return P.name + ' te convidou';
+    return 'Vincule a sua esposa ou outra pessoa';
+  }
+
+  /** Vincular com outra pessoa: convite, aceite, apelido e desfazer. */
+  V.parceiro = function () {
+    let html = backHead('Dividir contas');
+    if (!B.socialReady()) {
+      return html + '<p class="callout">' + esc(B.socialError() || 'O banco ainda não tem a divisão de contas. Rode o arquivo supabase/migracao-05-dividir-conta.sql no SQL Editor do Supabase.') + '</p>';
+    }
+    const P = B.partner();
+    const myName = F.tagClean(B.settings().meu_nome) || ((S.user && S.user.email ? S.user.email.split('@')[0] : '').replace(/^./, (c) => c.toUpperCase()));
+    html += '<p class="muted-text lead">Vincule a outra pessoa (a sua esposa, por exemplo) para mandar parte de uma compra para a conta dela. Ela aceita ou recusa. Ninguém vê os lançamentos do outro: ela só vê o que você dividir com ela.</p>';
+    if (P.state === 'none') {
+      html += '<section class="plain"><h2>Convidar</h2>' +
+        '<label class="field"><span>Seu nome (como ela vai ver você)</span><input id="p-name" maxlength="40" autocomplete="off" value="' + esc(myName) + '"></label>' +
+        '<label class="field"><span>E-mail da conta dela no Bolso</span><input id="p-email" type="email" inputmode="email" autocomplete="off" placeholder="nome@exemplo.com"></label>' +
+        '<p class="hint">Ela precisa ter criado a conta antes. Depois que ela aceitar o convite, o vínculo fica pronto.</p>' +
+        '<p class="form-err" id="p-err" role="alert"></p><button type="button" class="btn primary" data-act="partner-invite">Enviar convite</button></section>';
+    } else if (P.state === 'sent') {
+      html += '<section class="plain"><h2>Convite enviado</h2><p class="muted-text">Falta a outra pessoa abrir o Bolso e aceitar. O convite aparece no Resumo dela.</p>' +
+        '<p class="form-err" id="p-err" role="alert"></p><button type="button" class="btn" data-act="partner-unlink">Cancelar convite</button></section>';
+    } else if (P.state === 'received') {
+      html += '<section class="plain"><h2>Convite de ' + esc(P.name) + '</h2><p class="muted-text">Aceitando, vocês dois podem mandar pedidos de divisão um para o outro. Cada pedido mostra só a descrição, a parte, o cartão e o vencimento.</p>' +
+        '<label class="field"><span>Seu nome (como ' + esc(P.name) + ' vai ver você)</span><input id="p-name" maxlength="40" autocomplete="off" value="' + esc(myName) + '"></label>' +
+        '<p class="form-err" id="p-err" role="alert"></p><div class="stack"><button type="button" class="btn primary" data-act="partner-accept">Aceitar convite</button>' +
+        '<button type="button" class="btn" data-act="partner-refuse">Recusar</button></div></section>';
+    } else {
+      html += '<section class="plain"><h2>Vinculado com ' + esc(P.theirName || 'a outra pessoa') + '</h2>' +
+        '<label class="field"><span>Como você chama essa pessoa</span><input id="p-nick" maxlength="40" autocomplete="off" placeholder="' + esc(P.theirName || 'Apelido') + '" value="' + esc(P.nick) + '"></label>' +
+        '<p class="hint">É o nome que aparece para você nas divisões e no "A receber". Deixe vazio para usar ' + esc(P.theirName || 'o nome dela') + '.</p>' +
+        '<p class="form-err" id="p-err" role="alert"></p><button type="button" class="btn primary" data-act="partner-nick">Salvar apelido</button></section>' +
+        '<section class="plain danger-zone"><h2>Desfazer vínculo</h2><p class="muted-text">Pedidos que ainda esperam resposta somem. As contas que já foram aceitas continuam valendo para os dois.</p>' +
+        '<button type="button" class="btn danger" data-act="partner-unlink">Desfazer vínculo</button></section>';
+    }
+    return html;
+  };
+
   /* ---------- Roteamento e desenho ---------- */
 
   const NAV = [['resumo', 'Resumo'], ['extrato', 'Extrato'], ['analises', 'Análises'], ['mais', 'Mais']];
@@ -728,7 +850,7 @@
   B.parseHash = function () {
     const parts = (root.location.hash || '').replace(/^#\/?/, '').split('/');
     const r = NAV.some(([id]) => id === parts[0]) ? parts[0] : 'resumo';
-    const sub = r === 'mais' && ['parcelas', 'fixas', 'cartoes', 'nichos', 'etiquetas', 'dados'].includes(parts[1]) ? parts[1] : '';
+    const sub = r === 'mais' && ['parcelas', 'fixas', 'cartoes', 'nichos', 'etiquetas', 'parceiro', 'dados'].includes(parts[1]) ? parts[1] : '';
     let arg = '';
     if (sub === 'etiquetas' && parts[2]) { try { arg = decodeURIComponent(parts[2]); } catch (e) { arg = ''; } }
     return { r, sub, arg };
@@ -783,6 +905,78 @@
     B.render();
   });
   A.signout = () => B.guard(async () => { await S.store.auth.signOut(); });
+
+  /* Divisão de contas */
+  async function partnerAct(btn, work, okMsg) {
+    const err = B.$('#p-err');
+    if (err) err.textContent = '';
+    btn.disabled = true;
+    try { await work(); B.render(); if (okMsg) B.toast(okMsg); }
+    catch (e) { console.error(e); if (err) err.textContent = e.message || 'Algo deu errado. Tente de novo.'; else B.toast(e.message || 'Algo deu errado.', 'err'); btn.disabled = false; }
+  }
+  A['partner-invite'] = (el) => {
+    const name = B.$('#p-name').value.trim(), email = B.$('#p-email').value.trim();
+    if (!name) { B.$('#p-err').textContent = 'Escreva o seu nome.'; return B.$('#p-name').focus(); }
+    if (!/^\S+@\S+\.\S+$/.test(email)) { B.$('#p-err').textContent = 'Escreva o e-mail da conta dela.'; return B.$('#p-email').focus(); }
+    return partnerAct(el, () => B.invitePartner(email, name), 'Convite enviado.');
+  };
+  A['partner-accept'] = (el) => {
+    const name = B.$('#p-name').value.trim();
+    if (!name) { B.$('#p-err').textContent = 'Escreva o seu nome.'; return B.$('#p-name').focus(); }
+    return partnerAct(el, () => B.answerInvite(true, name), 'Vínculo feito.');
+  };
+  A['partner-refuse'] = async (el) => {
+    const ok = await B.ask({ title: 'Recusar o convite?', text: 'O convite some. ' + B.partner().name + ' pode convidar de novo.', actions: [{ label: 'Recusar convite', value: true, kind: 'danger' }] });
+    if (ok) await partnerAct(el, () => B.answerInvite(false, ''), 'Convite recusado.');
+  };
+  A['partner-nick'] = (el) => partnerAct(el, async () => {
+    await B.saveSettings({ parceiro_apelido: F.tagClean(B.$('#p-nick').value) || null });
+    B.applyShares();
+  }, 'Apelido salvo.');
+  A['partner-unlink'] = async (el) => {
+    const linked = B.partner().state === 'linked';
+    if (linked) {
+      const ok = await B.ask({ title: 'Desfazer o vínculo?', text: 'Pedidos que ainda esperam resposta somem. As contas que já foram aceitas continuam valendo para os dois, mas vocês não conseguem mandar pedidos novos.', actions: [{ label: 'Desfazer vínculo', value: true, kind: 'danger' }] });
+      if (!ok) return;
+    }
+    await partnerAct(el, () => B.unlinkPartner(), linked ? 'Vínculo desfeito.' : 'Convite cancelado.');
+  };
+  A['req-accept'] = (el) => B.openAcceptSheet(el.dataset.key);
+  A['req-refuse'] = (el) => B.guard(async () => {
+    const g = B.requestsForMe().find((r) => r.key === el.dataset.key);
+    if (!g) return;
+    const P = B.partner();
+    const ok = await B.ask({ title: 'Recusar este pedido?', text: 'A conta "' + g.first.description + '" volta a ser toda de ' + P.name + '. Ele ou ela vê que você recusou.', actions: [{ label: 'Recusar', value: true, kind: 'danger' }] });
+    if (!ok) return;
+    await B.refuseShares(g.ids);
+    B.render();
+    B.toast('Pedido recusado.');
+  });
+  A['notice-ok'] = (el) => B.guard(async () => {
+    const n = B.noticesForMe().find((x) => x.key === el.dataset.key);
+    if (!n) return;
+    await B.dismissShares(n.ids);
+    B.render();
+  });
+  /** Confirmar o recebimento: cria a entrada e tira a conta de "A receber". */
+  async function receive(ids) {
+    const list = ids.map((id) => B.findTx(id)).filter(Boolean);
+    if (!list.length) return;
+    const name = F.tagClean(list[0].split_with);
+    const cents = list.reduce((s, t) => s + F.othersCents(t), 0);
+    const unpaid = list.filter((t) => { const x = B.ownShare(t.id); return x && !x.partner_paid; }).length;
+    const warn = unpaid ? name + ' ainda não marcou ' + (unpaid === list.length ? (list.length === 1 ? 'esta conta' : 'estas contas') : unpaid + ' delas') + ' como paga. ' : '';
+    const ok = await B.ask({ title: 'Confirmar que recebeu de ' + name + '?', text: warn + 'Entra uma entrada de ' + brlN(cents / 100) + ' no seu Extrato, com a data de hoje.', actions: [{ label: 'Recebi ' + brlN(cents / 100), value: true, kind: 'primary' }] });
+    if (!ok) return;
+    const res = await B.settleSplit(list.map((t) => t.id));
+    B.render();
+    if (res) B.toast('Entrada de ' + brlN(res.cents / 100) + ' lançada.');
+  }
+  A.recv = (el) => B.guard(() => receive([el.dataset.id]));
+  A['recv-all'] = (el) => B.guard(async () => {
+    const p = B.receivables().find((x) => x.key === el.dataset.key);
+    if (p) await receive(p.items.map((t) => t.id));
+  });
 
   A['export-csv'] = () => { B.download('bolso-lancamentos.csv', B.exportCSV(), 'text/csv;charset=utf-8'); B.toast('Planilha baixada.'); };
   A['export-json'] = () => { B.download('bolso-backup-' + B.today() + '.json', B.exportJSON(), 'application/json'); B.toast('Backup baixado.'); };

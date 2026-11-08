@@ -57,7 +57,7 @@
   B.catName = (key) => B.cat(key).name;
   B.card = (id) => (id ? S.data.cards.find((c) => c.id === id) || null : null);
   B.cardName = (id) => (!id || id === '_dinheiro' ? F.CASH_NAME : sharedCard(id) ? sharedCard(id).name : (B.card(id) || { name: 'Cartão removido' }).name);
-  B.cardColor = (id) => (id && B.card(id) ? B.card(id).color : sharedCard(id) && sharedCard(id).color ? sharedCard(id).color : 'var(--muted)');
+  B.cardColor = (id) => (id && B.card(id) ? F.safeColor(B.card(id).color) : sharedCard(id) && sharedCard(id).color ? F.safeColor(sharedCard(id).color) : 'var(--muted)');
   B.srcName = (key) => (F.SOURCES.find((s) => s.key === key) || F.SOURCES[2]).name;
   B.srcVar = (key) => 'var(--src-' + (F.SOURCES.find((s) => s.key === key) ? key : 'outra') + ')';
   B.isBilledCard = (id) => F.isBilled(B.card(id));
@@ -289,7 +289,7 @@
 
   const virtualTx = (x, ownerName) => {
     const cid = SHARED_PREFIX + x.card_name;
-    S.sharedCards[cid] = { name: x.card_name + ' de ' + ownerName, color: x.card_color || null };
+    S.sharedCards[cid] = { name: x.card_name + ' de ' + ownerName, color: F.safeColor(x.card_color, null) };
     return {
       id: 'share:' + x.id, share_id: x.id, kind: 'despesa', description: x.description, amount: x.amount, date: x.date, month: x.month,
       category: x.partner_category || x.suggested_category || 'outros', card_id: cid, source: x.partner_source || 'definir',
@@ -616,20 +616,41 @@
 
   B.exportCSV = () => F.toCSV(S.data.transactions, { catName: B.catName, cardName: B.cardName });
 
+  B.IMPORT_MAX_BYTES = 5 * 1024 * 1024;
   B.importJSON = async (text) => {
+    if (typeof text !== 'string' || text.length > B.IMPORT_MAX_BYTES) throw new Error('Esse arquivo é grande demais para ser um backup do Bolso (o limite é 5 MB).');
     let obj;
     try { obj = JSON.parse(text); } catch (e) { throw new Error('Esse arquivo não é um backup do Bolso.'); }
-    if (!obj || obj.app !== 'bolso' || !obj.data) throw new Error('Esse arquivo não é um backup do Bolso.');
-    const added = {};
-    for (const t of ['cards', 'categories', 'recurring', 'transactions']) {
+    if (!obj || obj.app !== 'bolso' || !obj.data || typeof obj.data !== 'object') throw new Error('Esse arquivo não é um backup do Bolso.');
+    const tables = ['cards', 'categories', 'recurring', 'transactions'];
+    const total = tables.reduce((n, t) => n + (Array.isArray(obj.data[t]) ? obj.data[t].length : 0), 0);
+    if (total > F.IMPORT_LIMITS.rows) throw new Error('Esse backup tem linhas demais (o limite é ' + F.IMPORT_LIMITS.rows + ').');
+    // primeiro confere tudo; só grava depois, para um arquivo ruim não deixar o backup pela metade
+    const plan = {}, skipped = {};
+    let skippedTotal = 0;
+    for (const t of tables) {
       const have = new Set(S.data[t].map((r) => r.id));
-      const rows = (Array.isArray(obj.data[t]) ? obj.data[t] : []).filter((r) => r && r.id && !have.has(r.id)).map((r) => pick(t, r));
-      if (t === 'transactions' || t === 'recurring') for (const r of rows) r.amount = Number(r.amount) || 0;
-      // backup antigo não tinha a data de lançamento: restaurar não pode virar "ajuste" em tudo
-      if (t === 'transactions') for (const r of rows) if (!r.created_at && r.date) r.created_at = B.stampOn(r.date);
-      if (rows.length) await S.store.insert(t, rows);
-      added[t] = rows.length;
+      const rows = [];
+      skipped[t] = 0;
+      for (const raw of (Array.isArray(obj.data[t]) ? obj.data[t] : [])) {
+        if (raw && raw.id && have.has(raw.id)) continue; // já existe: não duplica
+        const res = F.cleanRow(t, raw, { looseIds: S.store.mode !== 'supabase' });
+        if (res.skip) { skipped[t]++; skippedTotal++; continue; }
+        if (have.has(res.row.id)) continue;
+        have.add(res.row.id);
+        const r = pick(t, res.row);
+        // backup antigo não tinha a data de lançamento: restaurar não pode virar "ajuste" em tudo
+        if (t === 'transactions' && !r.created_at && r.date) r.created_at = B.stampOn(r.date);
+        rows.push(r);
+      }
+      plan[t] = rows;
     }
+    const added = {};
+    for (const t of tables) {
+      if (plan[t].length) await S.store.insert(t, plan[t]);
+      added[t] = plan[t].length;
+    }
+    added.skipped = skippedTotal;
     // saldo inicial: só entra se a pessoa ainda não tem um
     const op = F.openingOf(obj.data.settings);
     if (op && !F.openingOf(B.settings())) { await B.saveSettings({ saldo_inicial: { mes: op.month, valor: op.amount } }); added.settings = 1; }

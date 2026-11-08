@@ -48,7 +48,7 @@
       if (n && cur && cur.change) cur.change(n, e.target);
     });
     el.addEventListener('submit', (e) => { e.preventDefault(); if (cur) cur.submit(); });
-    el.addEventListener('close', () => { cur = null; });
+    el.addEventListener('close', () => { if (!el.open) cur = null; }); // o evento chega depois: se outra folha já abriu, o formulário novo não pode ser zerado
   }
   B.wireSheets = wire;
 
@@ -66,12 +66,14 @@
       category: null, card_id: null, source: 'salario', repeat: 'once', n: 2, startNo: '1',
       nextMonth: false, paid: true, paidTouched: false, cardTouched: false, sourceTouched: false, catTouched: false, catFrom: '',
       recurring_id: null, group_id: null, installment_no: null, installments_total: null, skipped: false, tag: '',
+      split: 'nao', splitWho: '', splitPartner: false, splitMode: 'half', splitAmt: '', splitDone: false,
     }, base || {});
   }
 
   const paidDefault = (d) => d.date <= B.today();
   const isPaid = (d) => (d.paidTouched || d.id ? d.paid : paidDefault(d));
 
+  const nb = (v) => F.fmtBRL(v).replace(' ', '\u00a0'); // valor que não quebra linha no meio
   const dm = (dateStr) => F.pad(F.dayOf(dateStr)) + '/' + dateStr.slice(5, 7);
   const cardOf = (d) => (d.kind === 'despesa' && d.card_id ? B.card(d.card_id) : null);
   /** Cartão de crédito com fechamento e vencimento: a compra vai para a fatura e não pergunta salário ou vale. */
@@ -174,6 +176,7 @@
         '<div id="card-note">' + cardNote(d) + '</div>';
     }
     if (tagAllowed(d)) h += tagField(d);
+    if (splitAllowed(d)) h += splitField(d);
     h += '<div id="late-note">' + lateNote(d) + '</div>';
 
     const billed = !!billedOf(d);
@@ -226,6 +229,80 @@
       '<p class="hint tag-hint">Junta gastos de cartões e meses diferentes, como uma viagem ou uma reforma. Em compra parcelada, vale para todas as parcelas.</p>';
   }
   function paintTags(d) { const c = B.$('#tag-chips'); if (c) c.innerHTML = tagChips(d); }
+
+  /** Dividir a conta com outra pessoa: só em saída que não é conta fixa (a conta fixa volta todo mês sem divisão). */
+  const splitAllowed = (d) => d.kind === 'despesa' && d.repeat !== 'monthly';
+  const splitOn = (d) => splitAllowed(d) && d.split === 'sim';
+  /** Parte da outra pessoa em centavos pelo modo escolhido; null se ainda falta valor. */
+  function splitCents(d) {
+    const total = F.toCents(F.parseMoney(d.amountText));
+    if (!(total > 0)) return null;
+    if (d.splitMode === 'other') {
+      const v = F.parseMoney(d.splitAmt);
+      return v > 0 ? F.splitShareCents(total, 'other', F.toCents(v)) : null;
+    }
+    return F.splitShareCents(total, d.splitMode);
+  }
+  function splitHint(d) {
+    if (!splitOn(d)) return '';
+    const who = F.tagClean(d.splitWho);
+    const name = who ? esc(who) : 'A outra pessoa';
+    const total = F.toCents(F.parseMoney(d.amountText));
+    if (!(total > 0)) return 'Digite o valor da conta para ver como fica a divisão.';
+    if (d.splitMode === 'other') {
+      const v = F.parseMoney(d.splitAmt);
+      if (!(v > 0)) return 'Digite quanto ' + name + ' vai pagar.';
+      if (F.toCents(v) > total) return name + ' não pode pagar mais do que o valor da conta.';
+    }
+    const other = splitCents(d);
+    if (!(other > 0)) return 'Esse valor é pequeno demais para dividir.';
+    return (d.repeat === 'installments' ? 'Na compra toda: você' : 'Você') + ' fica com <b>' + nb((total - other) / 100) + '</b>. ' +
+      name + ' te deve <b>' + nb(other / 100) + '</b>.';
+  }
+  function whoChips(d) {
+    const cur = F.tagKey(d.splitWho);
+    const P = B.partner();
+    let h = '';
+    if (P.state === 'linked') h += '<button type="button" class="opt" aria-pressed="' + d.splitPartner + '" data-f="who-partner">' + icon('link', 'xs') + '<span>' + esc(P.name) + '</span></button>';
+    const others = F.personList(S.data.transactions).filter((p) => !(P.state === 'linked' && p.key === F.tagKey(P.name))).slice(0, 5);
+    h += others.map((p) => '<button type="button" class="opt" aria-pressed="' + (!d.splitPartner && cur === p.key) + '" data-f="who" data-v="' + esc(p.name) + '">' + esc(p.name) + '</button>').join('');
+    return h;
+  }
+  /** Com a pessoa vinculada, o pedido vai para a conta dela e ela aceita ou recusa; com um nome solto, fica só o seu controle de "A receber". */
+  function shareNote(d) {
+    if (!d.splitPartner) return '';
+    const P = B.partner();
+    const x = d.id ? B.ownShare(d.id) : null;
+    if (x && x.status === 'accepted') return '<p class="hint">' + esc(P.name) + ' já aceitou. Se você mudar o valor, a data, o cartão ou a descrição, ' + esc(P.name) + ' precisa aceitar de novo.</p>';
+    if (x && x.status === 'pending') return '<p class="hint">Esperando ' + esc(P.name) + ' aceitar.</p>';
+    return '<p class="hint">O pedido vai para a conta de ' + esc(P.name) + ': ela vê só a descrição, a parte dela, o cartão e o vencimento, e aceita ou recusa.</p>';
+  }
+  function splitField(d) {
+    if (d.splitDone) { // a devolução já foi recebida: não deixa mudar a divisão sem desfazer antes
+      const t = d.id ? B.findTx(d.id) : null;
+      return '<p class="callout"><b>' + esc(d.splitWho) + '</b> já devolveu ' + nb((t ? F.othersCents(t) : 0) / 100) + ' desta conta. ' +
+        '<button type="button" class="link-btn" data-f="unsettle">Marcar como não recebido</button></p>';
+    }
+    let h = '<div class="field"><span>Dividir esta conta?</span>' + seg('split', [['nao', 'Não'], ['sim', 'Sim']], d.split) + '</div>';
+    if (d.split !== 'sim') return h;
+    const chips = whoChips(d);
+    h += '<div class="field"><span>Com quem?</span>' + (chips ? '<div class="opts row" id="who-chips">' + chips + '</div>' : '') + '</div>';
+    if (!d.splitPartner) {
+      h += '<label class="field"><span>Nome da pessoa</span><input id="f-who" data-in="who" list="who-list" maxlength="40" placeholder="Ex.: Maria" value="' + esc(d.splitWho) + '"></label>' +
+        '<datalist id="who-list">' + F.personList(S.data.transactions).map((p) => '<option value="' + esc(p.name) + '">').join('') + '</datalist>';
+    }
+    h += '<div id="share-note">' + shareNote(d) + '</div>' +
+      '<div class="field"><span>Como dividir?</span>' + seg('splitMode', [['half', 'Meio a meio'], ['other', 'Outro valor'], ['all', 'Paga tudo']], d.splitMode) + '</div>';
+    if (d.splitMode === 'other') {
+      h += '<label class="field"><span>Quanto a outra pessoa vai pagar?</span><span class="money"><i>R$</i>' +
+        '<input id="f-split-amt" data-in="splitamt" inputmode="decimal" placeholder="0,00" value="' + esc(d.splitAmt) + '" aria-label="Parte da outra pessoa em reais"></span></label>';
+    }
+    return h + '<p class="hint" id="split-hint">' + splitHint(d) + '</p>';
+  }
+  function paintSplit(d) {
+    const h = B.$('#split-hint'); if (h) h.innerHTML = splitHint(d);
+    const c = B.$('#who-chips'); if (c) c.innerHTML = whoChips(d);
+  }
 
   function installHint(d) {
     const total = F.parseMoney(d.amountText);
@@ -302,6 +379,11 @@
         if (name === 'kind') { d.kind = v; if (v === 'receita') { d.category = null; d.catFrom = ''; if (d.repeat === 'installments') d.repeat = 'once'; } else suggestNiche(d); if (!d.sourceTouched) d.source = 'salario'; return redraw(); }
         if (name === 'category') { d.category = v; d.catTouched = true; d.catFrom = ''; return redraw(); }
         if (name === 'tag') { d.tag = F.tagKey(d.tag) === F.tagKey(v) ? '' : v; const el = B.$('#f-tag'); if (el) el.value = d.tag; return paintTags(d); }
+        if (name === 'split') { d.split = v; if (v === 'sim' && !d.splitWho) { const P = B.partner(); if (P.state === 'linked') { d.splitPartner = true; d.splitWho = P.name; } } return redraw(); }
+        if (name === 'splitMode') { d.splitMode = v; redraw(); if (v === 'other') { const el = B.$('#f-split-amt'); if (el) el.focus(); } return; }
+        if (name === 'who-partner') { const P = B.partner(); d.splitPartner = !d.splitPartner; d.splitWho = d.splitPartner ? P.name : ''; return redraw(); }
+        if (name === 'who') { const was = d.splitPartner; d.splitPartner = false; d.splitWho = !was && F.tagKey(d.splitWho) === F.tagKey(v) ? '' : v; if (was) return redraw(); const el = B.$('#f-who'); if (el) el.value = d.splitWho; return paintSplit(d); }
+        if (name === 'unsettle') return ctrl.unsettle();
         if (name === 'card_id') { d.card_id = v || null; d.cardTouched = true; return redraw(); }
         if (name === 'source') { d.source = v; d.sourceTouched = true; return redraw(); }
         if (name === 'repeat') { d.repeat = v; return redraw(); }
@@ -321,7 +403,9 @@
         if (name === 'new-cat') return openCategorySheet(d);
       },
       input(name, el) {
-        if (name === 'amount') d.amountText = el.value;
+        if (name === 'amount') { d.amountText = el.value; paintSplit(d); }
+        if (name === 'who') { d.splitWho = el.value; paintSplit(d); }
+        if (name === 'splitamt') { d.splitAmt = el.value; paintSplit(d); }
         if (name === 'tag') { d.tag = el.value; paintTags(d); }
         if (name === 'desc') { d.description = el.value; if (suggestNiche(d)) paintNiche(d); const it = B.$('#inst-text'); if (it) it.innerHTML = instTextHint(d); }
         if (name === 'date') {
@@ -345,7 +429,8 @@
       change(name, el) {
         if (name === 'paid') { d.paid = el.checked; d.paidTouched = true; }
         if (name === 'next') d.nextMonth = el.checked;
-        if (name === 'amount') { const v = F.parseMoney(el.value); if (v > 0) { d.amountText = F.fmtNum(v); el.value = d.amountText; } }
+        if (name === 'amount') { const v = F.parseMoney(el.value); if (v > 0) { d.amountText = F.fmtNum(v); el.value = d.amountText; paintSplit(d); } }
+        if (name === 'splitamt') { const v = F.parseMoney(el.value); if (v > 0) { d.splitAmt = F.fmtNum(v); el.value = d.splitAmt; paintSplit(d); } }
         if (name === 'desc') { const sug = suggestNiche(d); if (autofill(d)) redraw(); else if (sug) paintNiche(d); }
       },
       async submit() {
@@ -361,6 +446,19 @@
           if (!(n >= 2 && n <= 60)) return showErr('Use de 2 a 60 parcelas.', '#f-n');
           const k = parseInt(d.startNo, 10) || 1;
           if (!(k >= 1 && k <= n)) return showErr('A parcela atual vai de 1 a ' + n + '.', '#f-start');
+        }
+        let who = '', splitCt = 0;
+        if (splitOn(d) && !d.splitDone) {
+          if (d.splitPartner && B.partner().state !== 'linked') return showErr('O vínculo com a outra pessoa foi desfeito. Escolha um nome ou vincule de novo em Mais.');
+          who = d.splitPartner ? B.partner().name : F.personResolve(S.data.transactions, d.splitWho);
+          if (!who) return showErr('Escreva com quem você divide.', '#f-who');
+          if (d.splitMode === 'other') {
+            const v = F.parseMoney(d.splitAmt);
+            if (!(v > 0)) return showErr('Digite quanto ' + who + ' vai pagar.', '#f-split-amt');
+            if (F.toCents(v) > F.toCents(amount)) return showErr(who + ' não pode pagar mais do que o valor da conta.', '#f-split-amt');
+          }
+          splitCt = splitCents(d) || 0;
+          if (!(splitCt > 0)) return showErr('Esse valor é pequeno demais para dividir.');
         }
         const description = d.description.trim() || (d.kind === 'despesa' ? B.catName(d.category) : B.srcName(d.source));
         const tag = tagAllowed(d) ? F.tagResolve(S.data.transactions, d.tag) : '';
@@ -379,14 +477,29 @@
             // a coluna da etiqueta só vai para o banco quando a etiqueta mudou
             const before = F.tagClean((B.findTx(d.id) || {}).tag);
             const changed = d.kind === 'despesa' && tag !== before;
-            await B.updTx(d.id, changed ? Object.assign({}, base, { tag: tag || null }) : base);
+            let shareOpt;
+            let patch = changed ? Object.assign({}, base, { tag: tag || null }) : base;
+            // as colunas da divisão só vão para o banco quando a divisão mudou (conta com devolução já recebida fica como está)
+            if (d.kind === 'despesa' && !d.splitDone) {
+              const prev = B.findTx(d.id) || {};
+              const had = F.hasSplit(prev), wants = splitCt > 0;
+              const sh = B.ownShare(d.id);
+              const hadShare = !!sh && (sh.status === 'pending' || sh.status === 'accepted');
+              const wantsShare = wants && d.splitPartner;
+              const same = had === wants && hadShare === wantsShare && (!had || (F.tagKey(prev.split_with) === F.tagKey(who) && F.toCents(prev.split_share) === splitCt));
+              if (!same) patch = Object.assign({}, patch, wants ? { split_with: who, split_share: splitCt / 100, split_paid: false } : { split_with: null, split_share: null, split_paid: null });
+              shareOpt = wantsShare ? true : hadShare ? false : undefined;
+            }
+            await B.updTx(d.id, patch, shareOpt === undefined ? undefined : { sharePartner: shareOpt });
             // etiqueta é da compra inteira: vale para todas as parcelas
             if (changed && d.group_id) {
               const others = S.data.transactions.filter((x) => x.group_id === d.group_id && x.id !== d.id).map((x) => x.id);
               if (others.length) await B.updTxs(others, { tag: tag || null });
             }
           } else if (d.repeat === 'installments') {
-            await B.addTxs(F.buildInstallments({ description, totalAmount: amount, n, startNo: parseInt(d.startNo, 10) || 1, firstDate: d.date, category: d.category, card_id: d.card_id, card, txs: S.data.transactions, source: d.source, today: B.today(), tag }));
+            const parcelas = F.buildInstallments({ description, totalAmount: amount, n, startNo: parseInt(d.startNo, 10) || 1, firstDate: d.date, category: d.category, card_id: d.card_id, card, txs: S.data.transactions, source: d.source, today: B.today(), tag, splitWith: who, splitTotal: splitCt / 100 });
+            if (splitCt && d.splitPartner) for (const r of parcelas) r.share_partner = true;
+            await B.addTxs(parcelas);
           } else if (d.repeat === 'monthly') {
             const rec = {
               id: F.uid(), kind: d.kind, description, amount, day: F.dayOf(d.date), category: base.category, card_id: base.card_id,
@@ -394,7 +507,7 @@
             };
             await B.addRecurring(rec, Object.assign({ id: F.uid(), group_id: null, installment_no: null, installments_total: null }, base));
           } else {
-            await B.addTxs([Object.assign({ id: F.uid(), recurring_id: null, group_id: null, installment_no: null, installments_total: null, tag: tag || null }, base)]);
+            await B.addTxs([Object.assign({ id: F.uid(), recurring_id: null, group_id: null, installment_no: null, installments_total: null, tag: tag || null, split_with: splitCt ? who : null, split_share: splitCt ? splitCt / 100 : null, split_paid: splitCt ? false : null, share_partner: !!(splitCt && d.splitPartner) }, base)]);
           }
           return true;
         });
@@ -425,6 +538,21 @@
         if (!done) return;
         B.sheet.close(); B.render(); B.toast(ids.length > 1 ? ids.length + ' lançamentos excluídos.' : 'Lançamento excluído.');
       },
+      async unsettle() {
+        const t = d.id ? B.findTx(d.id) : null;
+        if (!t) return;
+        const ok = await B.ask({
+          title: 'Marcar como não recebido?', text: d.splitWho + ' volta a aparecer em "A receber". A entrada "' + d.splitWho + ' devolveu" que o Bolso criou continua no Extrato; exclua se não recebeu mesmo.',
+          actions: [{ label: 'Marcar como não recebido', value: true }],
+        });
+        if (!ok) return;
+        const done = await B.guard(async () => { await B.unsettleSplit([d.id]); return true; });
+        if (!done) return;
+        d.splitDone = false;
+        redraw();
+        B.render();
+        B.toast('Voltou para "A receber".');
+      },
       async skip() {
         const done = await B.guard(async () => { await B.updTx(d.id, { skipped: !d.skipped }); return true; });
         if (!done) return;
@@ -438,13 +566,106 @@
   B.editTx = (id) => {
     const t = B.findTx(id);
     if (!t) return;
+    if (t.share_id) return openSharedSheet(t);
     const base = {
       id: t.id, kind: t.kind, amountText: F.fmtNum(t.amount), description: t.description, date: t.date, category: t.category,
       card_id: t.card_id, source: t.source, paid: t.paid, paidTouched: true, nextMonth: t.kind === 'receita' && t.month !== F.monthOf(t.date),
       recurring_id: t.recurring_id, group_id: t.group_id, installment_no: t.installment_no, installments_total: t.installments_total, skipped: t.skipped, cardTouched: true, sourceTouched: true, tag: t.tag || '',
     };
+    if (F.hasSplit(t)) { // refaz a escolha de divisão a partir do que está salvo
+      const tc = F.toCents(t.amount), sc = F.toCents(t.split_share);
+      Object.assign(base, {
+        split: 'sim', splitWho: F.tagClean(t.split_with), splitDone: !!t.split_paid, splitAmt: F.fmtNum(t.split_share),
+        splitMode: sc >= tc ? 'all' : sc === Math.floor(tc / 2) ? 'half' : 'other',
+        splitPartner: (() => { const x = B.ownShare(t.id); return !!x && (x.status === 'pending' || x.status === 'accepted'); })(),
+      });
+    }
     openTxSheet(t.kind, base);
   };
+
+  /* ---------- Conta que outra pessoa dividiu com você ---------- */
+
+  const allCats = () => F.CATEGORIES.concat(S.data.categories.map((c) => ({ key: c.id, emoji: c.emoji, name: c.name })));
+  function nichePicker(selected) {
+    return '<div class="field"><span>Nicho</span><div class="opts" data-keep-scroll>' + allCats().map((c) =>
+      '<button type="button" class="opt" aria-pressed="' + (selected === c.key) + '" data-f="category" data-v="' + esc(c.key) + '"><span class="e">' + esc(c.emoji) + '</span>' + esc(c.name) + '</button>').join('') + '</div></div>';
+  }
+  function sourcePicker(d, dateStr) {
+    let h = '<div class="field"><span>Sai de</span>' + seg('source', [['salario', 'Salário'], ['vale', 'Vale'], ['outra', 'Outra fonte']], d.source) + '</div>';
+    if (d.source === 'definir') {
+      h += '<p class="hint">Nenhuma renda cadastrada, então fica <b>A definir</b>. Escolha uma aqui ou cadastre em Mais, Contas fixas.</p>';
+    } else if (!d.sourceTouched && dateStr) {
+      h += '<p class="hint">Pela data (' + dm(dateStr) + '), sai do <b>' + esc(B.srcName(d.source)) + '</b>. Toque em outra para trocar.</p>';
+    }
+    return h;
+  }
+  const defaultSource = (dateStr) => { const inc = F.incomeForDate(S.data.recurring, dateStr); return inc ? inc.key : 'definir'; };
+
+  /** Aceitar um pedido de divisão: escolher o nicho e de qual renda sai. Aceita todas as parcelas da compra de uma vez. */
+  B.openAcceptSheet = (key) => {
+    const g = B.requestsForMe().find((r) => r.key === key);
+    if (!g) return;
+    const f = g.first, P = B.partner();
+    const d = { category: f.suggested_category || 'outros', source: defaultSource(f.date), sourceTouched: false };
+    const ctrl = {
+      draft: d,
+      render() {
+        const card = f.card_name === F.CASH_NAME ? '' : ' no cartão <b>' + esc(f.card_name) + '</b>';
+        const when = g.count > 1 ? plural2(g.count, 'parcela', 'parcelas') + ' de ' + nb(f.amount) + ', a primeira vence em ' + dm(f.date) : 'vence em ' + dm(f.date);
+        return '<form id="acc-form" novalidate>' + head('Aceitar divisão') +
+          '<p class="muted-text share-sum"><b>' + esc(f.description) + '</b>: ' + esc(P.name) + ' colocou <b>' + nb(g.total) + '</b> para você pagar' + card + ', ' + when + '.</p>' +
+          nichePicker(d.category) + sourcePicker(d, f.date) +
+          '<p class="form-err" id="f-err" role="alert"></p><div class="sheet-actions"><button type="submit" class="btn primary" id="f-save">Aceitar</button></div></form>';
+      },
+      field(name, v) {
+        if (name === 'category') { d.category = v; return redraw(); }
+        if (name === 'source') { d.source = v; d.sourceTouched = true; return redraw(); }
+      },
+      async submit() {
+        const btn = B.$('#f-save'); btn.disabled = true;
+        const ok = await B.guard(async () => { await B.acceptShares(g.ids, { category: d.category, source: d.source }); return true; });
+        if (btn) btn.disabled = false;
+        if (!ok) return;
+        B.sheet.close(); B.render(); B.toast('Aceito. A conta entrou no seu mês.');
+      },
+    };
+    open(ctrl);
+  };
+  const plural2 = (n, one, many) => n + ' ' + (n === 1 ? one : many);
+
+  /** Conta que você aceitou: o valor e o vencimento são de quem lançou; você muda o nicho, de onde sai e se já pagou. */
+  function openSharedSheet(t) {
+    const x = B.shareById(t.share_id);
+    if (!x) return;
+    const P = B.partner();
+    const d = { category: t.category, source: t.source, sourceTouched: true, paid: t.paid };
+    const ctrl = {
+      draft: d,
+      render() {
+        const parc = x.installments_total ? ', parcela ' + x.installment_no + ' de ' + x.installments_total : '';
+        let h = '<form id="shr-form" novalidate>' + head('Conta dividida') +
+          '<p class="callout"><b>' + esc(P.name) + '</b> lançou esta conta e dividiu com você. Para mudar o valor, a data ou o cartão, peça para ' + esc(P.name) + '.</p>' +
+          '<p class="muted-text share-sum"><b>' + esc(t.description) + '</b>' + parc + '<br>Sua parte: <b>' + nb(t.amount) + '</b><br>' + esc(B.cardName(t.card_id)) + ', vence em ' + dm(t.date) + '.</p>' +
+          nichePicker(d.category) + sourcePicker(d, null);
+        if (x.owner_received) h += '<p class="callout">' + esc(P.name) + ' confirmou que recebeu. Está paga.</p>';
+        else h += '<label class="check-row"><input type="checkbox" data-in="paid"' + (d.paid ? ' checked' : '') + '><span>Já paguei para ' + esc(P.name) + '</span></label>';
+        return h + '<p class="form-err" id="f-err" role="alert"></p><div class="sheet-actions"><button type="submit" class="btn primary" id="f-save">Salvar</button></div></form>';
+      },
+      field(name, v) {
+        if (name === 'category') { d.category = v; return redraw(); }
+        if (name === 'source') { d.source = v; return redraw(); }
+      },
+      change(name, el) { if (name === 'paid') d.paid = el.checked; },
+      async submit() {
+        const btn = B.$('#f-save'); btn.disabled = true;
+        const ok = await B.guard(async () => { await B.updTx(t.id, { category: d.category, source: d.source, paid: d.paid }); return true; });
+        if (btn) btn.disabled = false;
+        if (!ok) return;
+        B.sheet.close(); B.render(); B.toast('Alterações salvas.');
+      },
+    };
+    open(ctrl);
+  }
 
   /* ---------- Cartão ---------- */
 

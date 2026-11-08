@@ -55,6 +55,7 @@ Sem isso, o link do e-mail de confirmação e o de "esqueci a senha" não voltam
 1. Abra o endereço do app, toque em **Criar conta** e use seu e-mail e uma senha.
 2. Se o Supabase pedir confirmação de e-mail, clique no link da mensagem e depois entre. (Para dispensar a confirmação: **Authentication > Sign In / Providers > Email** e desligue **Confirm email**.)
 3. Depois de entrar, vá em **Authentication > Sign In / Providers** e desligue **Allow new users to sign up**. Assim ninguém mais consegue criar conta no seu app.
+4. Na mesma tela, em **Email**, suba **Minimum password length** para 8 ou mais. O app já pede 8 caracteres, com letras e números, ao criar ou trocar senha, mas só esta opção vale no servidor.
 
 ## 7. Instalar no celular
 
@@ -68,14 +69,15 @@ Depois, já logado no app com Supabase: **Restaurar de um backup** e escolha o a
 
 ## Atualizar um banco que já existe
 
-Quando uma versão nova do app precisa de colunas ou funções novas, ela vem com um arquivo em `supabase/` (por exemplo `migracao-02-fatura.sql` para a fatura do cartão e `migracao-03-excluir-conta.sql` para o botão "Excluir minha conta", `migracao-04-etiquetas.sql` para as etiquetas e `migracao-05-dividir-conta.sql` para dividir conta com outra pessoa).
-Cole o arquivo no **SQL Editor** do Supabase e clique em **Run**. Ele só acrescenta, não apaga nem altera nenhum dado, e pode ser rodado de novo sem problema.
+Quando uma versão nova do app precisa de colunas ou funções novas, ela vem com um arquivo em `supabase/` (por exemplo `migracao-02-fatura.sql` para a fatura do cartão e `migracao-03-excluir-conta.sql` para o botão "Excluir minha conta", `migracao-04-etiquetas.sql` para as etiquetas, `migracao-05-dividir-conta.sql` para dividir conta com outra pessoa e `migracao-06-seguranca.sql` para tirar permissões que sobravam e pôr limites de tamanho nos dados).
+Cole o arquivo no **SQL Editor** do Supabase e clique em **Run**. Ele não apaga nem altera nenhum dado e pode ser rodado de novo sem problema.
 Quem criar o banco do zero com `schema.sql` já recebe tudo.
 
 ## Cuidados
 
 - **Pausa por inatividade:** no plano gratuito, o Supabase pausa o projeto depois de cerca de uma semana sem uso. Usar o app já conta como atividade; se pausar, reative pelo painel do Supabase e não deixe parado por muito tempo. Por isso vale baixar o backup de vez em quando.
 - **Backup:** baixe o backup de vez em quando (Mais > Dados e backup). O plano gratuito não tem backup diário.
+- **Segurança:** com **Confirm email** desligado, qualquer pessoa pode criar conta com o e-mail que quiser, inclusive o de outra pessoa. Por isso crie as contas que você precisa e só então desligue o cadastro (passo 3). O Bolso também não abre dentro de moldura de outro site e só carrega a biblioteca do Supabase na versão e com o selo de integridade que estão em `js/store.js`; ao atualizar a versão, troque os dois juntos.
 - **Sem internet:** o app abre, mas lançar e salvar no modo Supabase exige conexão.
 - **Duas pessoas:** cada conta enxerga só os próprios dados. Para outra pessoa usar, ela cria a própria conta (ligue de novo a opção de cadastro por um momento).
 - **Dividir conta:** depois que as duas contas existem (e a migração 05 foi rodada), uma convida a outra em **Mais, Dividir contas**, pelo e-mail com que a outra se cadastrou. Só o que for dividido aparece para a outra pessoa; o resto continua privado. Só depois disso desligue o cadastro de novos usuários.

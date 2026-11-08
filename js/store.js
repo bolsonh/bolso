@@ -111,6 +111,7 @@
       [/failed to fetch|networkerror|load failed|network request failed/i, 'Sem conexão com o Supabase. Confira a internet e tente de novo.'],
       [/jwt expired|invalid jwt|refresh_token/i, 'Sua sessão expirou. Entre de novo.'],
       [/permission denied|row-level security|violates row-level/i, 'O banco recusou a gravação. Rode o arquivo schema.sql no Supabase e entre de novo.'],
+      [/could not find the 'tag' column|column .*\btag\b.* does not exist/i, 'O banco ainda não tem as etiquetas. Rode o arquivo supabase/migracao-04-etiquetas.sql no SQL Editor do Supabase e tente de novo.'],
       [/could not find the '[^']+' column|column .* does not exist|transactions_source_check/i, 'O banco ainda não tem a atualização da fatura do cartão. Rode o arquivo supabase/migracao-02-fatura.sql no SQL Editor do Supabase e tente de novo.'],
       [/could not find the function|pgrst202|excluir_minha_conta/i, 'O banco ainda não tem a função de excluir conta. Rode o arquivo supabase/migracao-03-excluir-conta.sql no SQL Editor do Supabase e tente de novo.'],
       [/entre na sua conta para poder/i, 'Sua sessão expirou. Entre de novo para excluir a conta.'],

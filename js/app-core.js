@@ -33,10 +33,10 @@
     cards: ['id', 'name', 'kind', 'color', 'closing_day', 'due_day', 'pay_source'],
     categories: ['id', 'name', 'emoji'],
     recurring: ['id', 'kind', 'description', 'amount', 'day', 'category', 'card_id', 'source', 'month_offset', 'start_month', 'active'],
-    transactions: ['id', 'kind', 'description', 'amount', 'date', 'month', 'category', 'card_id', 'source', 'paid', 'skipped', 'recurring_id', 'group_id', 'installment_no', 'installments_total', 'tag', 'created_at'],
+    transactions: ['id', 'kind', 'description', 'amount', 'date', 'month', 'category', 'card_id', 'source', 'paid', 'skipped', 'recurring_id', 'group_id', 'installment_no', 'installments_total', 'tag', 'split_with', 'split_share', 'split_paid', 'created_at'],
   };
-  // Colunas novas (fatura do cartão, etiqueta): só seguem para o banco quando têm valor, assim cartões antigos gravam igual a antes.
-  const OPTIONAL = { cards: ['closing_day', 'due_day', 'pay_source'], transactions: ['created_at', 'tag'] };
+  // Colunas novas (fatura do cartão, etiqueta, divisão da conta): só seguem para o banco quando têm valor, assim cartões antigos gravam igual a antes.
+  const OPTIONAL = { cards: ['closing_day', 'due_day', 'pay_source'], transactions: ['created_at', 'tag', 'split_with', 'split_share', 'split_paid'] };
   const pick = (table, row) => {
     const o = {};
     for (const c of COLS[table]) {
@@ -50,11 +50,14 @@
 
   /* ---------- Consultas ---------- */
 
+  /** Cartão de quem dividiu a conta com você: não é seu, só aparece com o nome ("Itaú de Natan"). */
+  const SHARED_PREFIX = 'cartao-de-fora:';
+  const sharedCard = (id) => (typeof id === 'string' && id.indexOf(SHARED_PREFIX) === 0 && S.sharedCards && S.sharedCards[id]) || null;
   B.cat = (key) => F.categoryInfo(key, S.data.categories);
   B.catName = (key) => B.cat(key).name;
   B.card = (id) => (id ? S.data.cards.find((c) => c.id === id) || null : null);
-  B.cardName = (id) => (!id || id === '_dinheiro' ? F.CASH_NAME : (B.card(id) || { name: 'Cartão removido' }).name);
-  B.cardColor = (id) => (id && B.card(id) ? B.card(id).color : 'var(--muted)');
+  B.cardName = (id) => (!id || id === '_dinheiro' ? F.CASH_NAME : sharedCard(id) ? sharedCard(id).name : (B.card(id) || { name: 'Cartão removido' }).name);
+  B.cardColor = (id) => (id && B.card(id) ? B.card(id).color : sharedCard(id) && sharedCard(id).color ? sharedCard(id).color : 'var(--muted)');
   B.srcName = (key) => (F.SOURCES.find((s) => s.key === key) || F.SOURCES[2]).name;
   B.srcVar = (key) => 'var(--src-' + (F.SOURCES.find((s) => s.key === key) ? key : 'outra') + ')';
   B.isBilledCard = (id) => F.isBilled(B.card(id));
@@ -137,7 +140,11 @@
 
   /* ---------- Gravação (grava primeiro; só atualiza a tela se deu certo) ---------- */
 
-  B.reload = async () => { S.data = await S.store.load(); };
+  B.reload = async () => {
+    S.data = await S.store.load();
+    B.applyShares();
+    await B.reconcileShares();
+  };
   B.settings = () => S.data.settings || {};
   /** Grava configurações (valor null apaga) e guarda na tela. */
   B.saveSettings = async (patch) => {
@@ -154,27 +161,322 @@
     return (isNaN(at) || at > now ? now : at).toISOString();
   };
 
+  const isVirt = (id) => typeof id === 'string' && id.indexOf('share:') === 0;
+  /** Campos do lançamento que a outra pessoa enxerga no pedido. */
+  const SHARE_WATCH = ['description', 'amount', 'date', 'month', 'card_id', 'installment_no', 'installments_total', 'split_with', 'split_share', 'split_paid'];
+
   B.addTxs = async (rows) => {
+    const wants = rows.filter((r) => r.share_partner).map((r) => r.id); // pedido para a pessoa vinculada
     rows = rows.map((r) => pick('transactions', r));
     await S.store.insert('transactions', rows);
     // o banco carimba sozinho a hora do lançamento; aqui a tela fica com o mesmo carimbo sem precisar recarregar
     const now = new Date().toISOString();
     S.data.transactions.push(...rows.map((r) => (r.created_at ? r : Object.assign({}, r, { created_at: now }))));
+    if (wants.length) {
+      try { await syncShares(wants, wants); }
+      catch (e) { // sem o pedido a divisão não vale: desfaz a gravação para não sobrar conta pela metade
+        try { await S.store.remove('transactions', rows.map((r) => r.id)); } catch (_) { /* a próxima carga acerta */ }
+        const gone = new Set(rows.map((r) => r.id));
+        S.data.transactions = S.data.transactions.filter((t) => !gone.has(t.id));
+        throw e;
+      }
+    }
   };
-  B.updTx = async (id, patch) => {
-    await S.store.update('transactions', id, patch);
-    Object.assign(B.findTx(id), patch);
+  B.updTx = async (id, patch, opts) => {
+    if (isVirt(id)) return B.updSharedTx(id, patch);
+    return B.updTxs([id], patch, opts);
   };
-  B.updTxs = async (ids, patch) => {
+  B.updTxs = async (ids, patch, opts) => {
+    opts = opts || {};
+    const virt = ids.filter(isVirt);
+    ids = ids.filter((id) => !isVirt(id));
+    for (const id of virt) await B.updSharedTx(id, patch);
+    if (!ids.length) return;
+    const prev = {};
+    for (const id of ids) {
+      const t = B.findTx(id);
+      prev[id] = {};
+      if (t) for (const k of Object.keys(patch)) prev[id][k] = t[k] === undefined ? null : t[k];
+    }
     await S.store.updateMany('transactions', ids, patch);
     const set = new Set(ids);
     for (const t of S.data.transactions) if (set.has(t.id)) Object.assign(t, patch);
+    const touches = Object.keys(patch).some((k) => SHARE_WATCH.includes(k));
+    if (touches || opts.sharePartner !== undefined) {
+      try { await syncShares(ids, opts.sharePartner === true ? ids : [], opts.sharePartner === false ? ids : []); }
+      catch (e) { // o pedido não acompanhou: volta o lançamento ao que era
+        for (const id of ids) {
+          try { await S.store.update('transactions', id, prev[id]); Object.assign(B.findTx(id), prev[id]); } catch (_) { /* a próxima carga acerta */ }
+        }
+        throw e;
+      }
+    }
   };
   B.delTxs = async (ids) => {
+    ids = ids.filter((id) => !isVirt(id));
     if (!ids.length) return;
+    const own = ids.map((id) => B.ownShare(id)).filter(Boolean);
     await S.store.remove('transactions', ids);
     const set = new Set(ids);
     S.data.transactions = S.data.transactions.filter((t) => !set.has(t.id));
+    if (own.length) { // o pedido acompanha: aceito vira "cancelado" (a outra pessoa é avisada), o resto some
+      try {
+        const accepted = own.filter((x) => x.status === 'accepted').map((x) => x.id);
+        if (accepted.length) await updShares(accepted, { status: 'cancelled' });
+        await dropShares(own.filter((x) => x.status !== 'accepted').map((x) => x.id));
+      } catch (e) { console.error(e); /* na próxima carga o app acerta */ }
+    }
+  };
+
+  /** Dar baixa na devolução: a outra pessoa pagou a parte dela. Cria uma entrada ("Fulano devolveu: ...") e marca as contas como devolvidas.
+      Se não conseguir marcar, desfaz tudo, para o dinheiro não contar duas vezes. Devolve { name, cents, count } para o aviso. */
+  B.settleSplit = async (ids) => {
+    const list = ids.map((id) => B.findTx(id)).filter((t) => t && F.hasSplit(t) && !t.split_paid);
+    if (!list.length) return null;
+    const cents = list.reduce((s, t) => s + F.othersCents(t), 0);
+    const name = list[0].split_with;
+    const what = list.length === 1 ? name + ' devolveu: ' + list[0].description : name + ' devolveu ' + list.length + ' contas';
+    const today = F.todayStr();
+    const row = {
+      id: F.uid(), kind: 'receita', description: what.slice(0, 80), amount: cents / 100, date: today, month: F.monthOf(today),
+      category: null, card_id: null, source: 'outra', paid: true, skipped: false,
+      recurring_id: null, group_id: null, installment_no: null, installments_total: null,
+    };
+    const sh = list.map((t) => B.ownShare(t.id)).filter((x) => x && x.status === 'accepted').map((x) => x.id);
+    if (sh.length) await updShares(sh, { owner_received: true });
+    try {
+      await B.addTxs([row]);
+      try { await B.updTxs(list.map((t) => t.id), { split_paid: true }); }
+      catch (e) { await B.delTxs([row.id]); throw e; }
+    } catch (e) {
+      if (sh.length) { try { await updShares(sh, { owner_received: false }); } catch (_) { /* segue */ } }
+      throw e;
+    }
+    return { name, cents, count: list.length };
+  };
+  /** Desfazer a baixa de uma conta dividida (marcou "recebi" sem ter recebido). Não mexe na entrada já criada: ela aparece no Extrato para apagar. */
+  B.unsettleSplit = async (ids) => {
+    const sh = ids.map((id) => B.ownShare(id)).filter((x) => x && x.status === 'accepted' && x.owner_received).map((x) => x.id);
+    await B.updTxs(ids, { split_paid: false });
+    if (sh.length) await updShares(sh, { owner_received: false });
+  };
+
+  /* ---------- Dividir conta com a pessoa vinculada (pedido, aceite, "paguei" e "recebi") ---------- */
+
+  const me = () => (S.user && S.user.id) || null;
+  const shares = () => (S.data && S.data.shares) || [];
+  B.shares = shares;
+  /** O banco já tem a atualização 05 (tabelas de vínculo e pedidos)? */
+  B.socialReady = () => !!(S.store.mode === 'supabase' && S.data && S.data.social && S.data.social.ready);
+  B.socialError = () => (S.data && S.data.social && S.data.social.error) || '';
+
+  /** Vínculo atual: { state: 'none' | 'sent' | 'received' | 'linked', link, id, theirName, nick, name }.
+      name é como VOCÊ chama a outra pessoa (o apelido que você deu, ou o nome que ela usa). */
+  B.partner = () => {
+    const links = (S.data && S.data.links) || [];
+    const my = me();
+    const l = links.find((x) => x.status === 'accepted') ||
+      links.find((x) => x.status === 'pending' && x.addressee_id === my) || links.find((x) => x.status === 'pending' && x.requester_id === my);
+    if (!l) return { state: 'none', name: '', nick: F.tagClean(B.settings().parceiro_apelido) };
+    const mine = l.requester_id === my;
+    const theirName = F.tagClean(mine ? l.addressee_name : l.requester_name);
+    const nick = F.tagClean(B.settings().parceiro_apelido);
+    const state = l.status === 'accepted' ? 'linked' : mine ? 'sent' : 'received';
+    return { state, link: l, id: mine ? l.addressee_id : l.requester_id, theirName, nick, name: (state === 'linked' ? nick : '') || theirName || 'a outra pessoa' };
+  };
+  B.ownShare = (txId) => shares().find((x) => x.owner_id === me() && x.tx_id === txId) || null;
+  B.shareById = (id) => shares().find((x) => x.id === id) || null;
+
+  const virtualTx = (x, ownerName) => {
+    const cid = SHARED_PREFIX + x.card_name;
+    S.sharedCards[cid] = { name: x.card_name + ' de ' + ownerName, color: x.card_color || null };
+    return {
+      id: 'share:' + x.id, share_id: x.id, kind: 'despesa', description: x.description, amount: x.amount, date: x.date, month: x.month,
+      category: x.partner_category || x.suggested_category || 'outros', card_id: cid, source: x.partner_source || 'definir',
+      paid: !!(x.partner_paid || x.owner_received), skipped: false, recurring_id: null, group_id: x.group_id,
+      installment_no: x.installment_no, installments_total: x.installments_total, tag: null, split_with: null, split_share: null, split_paid: null,
+      created_at: x.created_at, share_owner_received: !!x.owner_received,
+    };
+  };
+  /** As contas que a outra pessoa dividiu com você e você aceitou entram nas suas listas como lançamentos seus (só você mexe no nicho, na renda e no "paguei"). */
+  B.applyShares = () => {
+    if (!S.data) return;
+    S.sharedCards = {};
+    const my = me();
+    const owner = B.partner().name;
+    const real = (S.data.transactions || []).filter((t) => !t.share_id);
+    const virt = shares().filter((x) => x.partner_id === my && x.status === 'accepted').map((x) => virtualTx(x, owner));
+    S.data.transactions = real.concat(virt);
+  };
+
+  async function updShares(ids, patch) {
+    const rows = await S.store.updateRows('shares', ids, patch);
+    if (!rows.length) throw new Error('Pedido não encontrado. Talvez já tenha mudado em outro aparelho.');
+    if (!S.data.shares) S.data.shares = [];
+    for (const r of rows) { const i = S.data.shares.findIndex((x) => x.id === r.id); if (i >= 0) S.data.shares[i] = r; else S.data.shares.push(r); }
+    B.applyShares();
+    return rows;
+  }
+  async function dropShares(ids) {
+    if (!ids.length) return;
+    await S.store.remove('shares', ids);
+    const set = new Set(ids);
+    S.data.shares = shares().filter((x) => !set.has(x.id));
+    B.applyShares();
+  }
+
+  const SNAP_KEYS = ['description', 'amount', 'date', 'month', 'card_name', 'card_color', 'installment_no', 'installments_total', 'group_id', 'suggested_category'];
+  /** O que a outra pessoa precisa ver da sua compra: descrição, a parte dela, quando vence e em qual cartão. Nada além. */
+  B.shareSnapshot = (t) => {
+    const card = t.card_id ? B.card(t.card_id) : null;
+    const due = B.isBilledTx(t) ? F.invoiceDates(card, t.month).dueDate : t.date;
+    return {
+      description: t.description, amount: F.othersCents(t) / 100, date: due, month: t.month,
+      card_name: card ? card.name : F.CASH_NAME, card_color: card ? card.color : null,
+      installment_no: t.installment_no || null, installments_total: t.installments_total || null, group_id: t.group_id || null,
+      suggested_category: F.CATEGORIES.some((c) => c.key === t.category) ? t.category : null,
+    };
+  };
+  const sameSnap = (x, snap) => SNAP_KEYS.every((k) => (k === 'amount' ? Math.round(x[k] * 100) === Math.round(snap[k] * 100) : (x[k] == null ? null : x[k]) === (snap[k] == null ? null : snap[k])));
+
+  /** Alinha os pedidos com os lançamentos já gravados. wantIds: lançamentos que devem ganhar pedido para a pessoa vinculada; offIds: os que não devem ter. */
+  async function syncShares(ids, wantIds, offIds) {
+    const want = new Set(wantIds || []), off = new Set(offIds || []);
+    const P = B.partner();
+    for (const id of ids) {
+      const t = B.findTx(id);
+      if (!t) continue;
+      const cur = B.ownShare(id);
+      if (!cur && !want.has(id)) continue;
+      if (want.has(id) && !B.socialReady()) throw new Error(B.socialError() || 'O banco ainda não tem a divisão de contas.');
+      const live = cur && (cur.status === 'pending' || cur.status === 'accepted');
+      const active = F.hasSplit(t) && !off.has(id) && (want.has(id) || live);
+      if (!active) { // não deve (mais) ter pedido
+        if (cur && cur.status === 'pending') await dropShares([cur.id]);
+        else if (cur && cur.status === 'accepted') await updShares([cur.id], { status: 'cancelled' });
+        continue;
+      }
+      if (cur && !live) { await dropShares([cur.id]); } // pedido recusado ou cancelado antes: começa um novo
+      const now = live ? cur : null;
+      const snap = B.shareSnapshot(t);
+      if (now) {
+        if (!sameSnap(now, snap)) await updShares([now.id], snap);
+      } else {
+        if (P.state !== 'linked') throw new Error('Vincule a outra pessoa em Mais antes de dividir a conta com ela.');
+        const rows = await S.store.insertRows('shares', [Object.assign({ id: F.uid(), partner_id: P.id, tx_id: id }, snap)]);
+        if (!S.data.shares) S.data.shares = [];
+        S.data.shares.push(...rows);
+        B.applyShares();
+      }
+    }
+  }
+
+  /** O que sobrou no seu lado depois de abrir o app: pedidos recusados voltam a ser só seus; pedidos de lançamentos que sumiram são encerrados. */
+  B.reconcileShares = async () => {
+    const my = me();
+    if (!my || !B.socialReady()) return;
+    try {
+      for (const x of shares().filter((y) => y.owner_id === my)) {
+        const t = S.data.transactions.find((y) => y.id === x.tx_id);
+        if (!t) {
+          if (x.status === 'accepted') await updShares([x.id], { status: 'cancelled' });
+          else if (x.status === 'pending') await dropShares([x.id]);
+          continue;
+        }
+        if (x.status === 'refused' && F.hasSplit(t) && !t.split_paid) {
+          const clear = { split_with: null, split_share: null, split_paid: null };
+          await S.store.update('transactions', t.id, clear);
+          Object.assign(t, clear);
+        }
+      }
+    } catch (e) { console.error(e); }
+  };
+
+  /** Mudanças que a outra pessoa pode fazer numa conta que aceitou: nicho, renda e "paguei". */
+  B.updSharedTx = async (vid, patch) => {
+    const x = B.shareById(vid.slice(6));
+    if (!x) throw new Error('Esse pedido não existe mais.');
+    const sp = {};
+    if ('paid' in patch) {
+      if (x.owner_received && !patch.paid) throw new Error(B.partner().name + ' já confirmou que recebeu.');
+      if (!x.owner_received) sp.partner_paid = !!patch.paid;
+    }
+    if ('category' in patch) sp.partner_category = patch.category;
+    if ('source' in patch) sp.partner_source = patch.source;
+    if (Object.keys(sp).length) await updShares([x.id], sp);
+  };
+
+  /** Pedidos esperando a sua resposta, juntando as parcelas da mesma compra. */
+  B.requestsForMe = () => {
+    const groups = new Map();
+    for (const x of shares().filter((y) => y.partner_id === me() && y.status === 'pending')) {
+      const k = x.group_id || x.id;
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(x);
+    }
+    return [...groups.values()].map((list) => {
+      list.sort((a, b) => (a.installment_no || 0) - (b.installment_no || 0) || (a.date < b.date ? -1 : 1));
+      const f = list[0];
+      return {
+        key: f.group_id || f.id, ids: list.map((x) => x.id), items: list, first: f, count: list.length,
+        total: list.reduce((s, x) => s + Math.round(x.amount * 100), 0) / 100,
+        changed: list.some((x) => x.changed),
+        prevTotal: list.some((x) => x.changed && x.prev_amount != null) ? list.reduce((s, x) => s + Math.round((x.changed && x.prev_amount != null ? x.prev_amount : x.amount) * 100), 0) / 100 : null,
+      };
+    });
+  };
+  /** Avisos que terminam com "Entendi", juntando as parcelas: pedido cancelado por quem mandou (aparece para você) ou recusado por quem recebeu (aparece para quem mandou). */
+  B.noticesForMe = () => {
+    const groups = new Map();
+    for (const x of shares()) {
+      const refused = x.owner_id === me() && x.status === 'refused', cancelled = x.partner_id === me() && x.status === 'cancelled';
+      if (!refused && !cancelled) continue;
+      const k = (refused ? 'r:' : 'c:') + (x.group_id || x.id);
+      if (!groups.has(k)) groups.set(k, { key: k, kind: refused ? 'refused' : 'cancelled', list: [] });
+      groups.get(k).list.push(x);
+    }
+    return [...groups.values()].map((g) => ({
+      key: g.key, kind: g.kind, ids: g.list.map((x) => x.id), first: g.list[0], count: g.list.length,
+      total: g.list.reduce((s, x) => s + Math.round(x.amount * 100), 0) / 100,
+    }));
+  };
+  /** O que outras pessoas devem a você: só entra o que a pessoa vinculada já aceitou (pedido pendente ainda não é dívida). */
+  B.receivables = () => F.receivables(S.data.transactions.filter((t) => { if (t.share_id) return false; const x = B.ownShare(t.id); return !x || x.status === 'accepted'; }));
+  /** Pedidos seus que a outra pessoa ainda não respondeu. */
+  B.waitingAccept = () => {
+    const pend = shares().filter((x) => x.owner_id === me() && x.status === 'pending');
+    return { count: new Set(pend.map((x) => x.group_id || x.id)).size, cents: pend.reduce((s, x) => s + Math.round(x.amount * 100), 0) };
+  };
+
+  B.acceptShares = async (ids, choice) => {
+    await updShares(ids, { status: 'accepted', partner_category: choice.category, partner_source: choice.source });
+  };
+  B.refuseShares = async (ids) => { await updShares(ids, { status: 'refused' }); };
+  B.dismissShares = async (ids) => { await dropShares(ids); };
+
+  /* ---------- Vínculo com a outra pessoa ---------- */
+
+  B.reloadSocial = async () => {
+    const x = await S.store.loadSocial();
+    S.data.shares = x.shares; S.data.links = x.links; S.data.social = x.social;
+    B.applyShares();
+  };
+  B.invitePartner = async (email, name) => {
+    await S.store.rpc('convidar_parceiro', { p_email: email, p_nome: name });
+    await B.saveSettings({ meu_nome: name });
+    await B.reloadSocial();
+  };
+  B.answerInvite = async (accept, name) => {
+    const l = B.partner().link;
+    if (!l) throw new Error('Esse convite não existe mais.');
+    await S.store.rpc('responder_convite', { p_id: l.id, p_aceitar: !!accept, p_nome: name || '' });
+    if (accept && name) await B.saveSettings({ meu_nome: name });
+    await B.reloadSocial();
+  };
+  /** Desfaz o vínculo (ou cancela o convite enviado). Pedidos sem resposta somem; os já aceitos continuam valendo para os dois. */
+  B.unlinkPartner = async () => {
+    await S.store.rpc('desfazer_vinculo');
+    await B.reloadSocial();
   };
 
   B.addCard = async (c) => {
@@ -307,7 +609,7 @@
       cards: S.data.cards.map((r) => pick('cards', r)),
       categories: S.data.categories.map((r) => pick('categories', r)),
       recurring: S.data.recurring.map((r) => pick('recurring', r)),
-      transactions: S.data.transactions.map((r) => pick('transactions', r)),
+      transactions: S.data.transactions.filter((r) => !r.share_id).map((r) => pick('transactions', r)),
       settings: B.settings(),
     },
   }, null, 2);

@@ -27,6 +27,14 @@
   }
   const redraw = () => { if (cur) B.sheet.set(cur.render()); };
 
+  /** Uma ação por vez na folha: o segundo toque enquanto o primeiro grava (rede lenta) é ignorado, em vez de criar em dobro. */
+  let busy = false;
+  async function once(fn) {
+    if (busy) return;
+    busy = true;
+    try { await fn(); } finally { busy = false; }
+  }
+
   function wire() {
     const el = B.$('#sheet');
     el.addEventListener('click', (e) => {
@@ -34,8 +42,8 @@
       if (e.target.closest('[data-close]')) return B.sheet.close();
       const b = e.target.closest('[data-f]');
       if (b && cur) return cur.field(b.dataset.f, b.dataset.v, b);
-      if (e.target.closest('[data-del]') && cur) return cur.remove();
-      if (e.target.closest('[data-skip]') && cur) return cur.skip();
+      if (e.target.closest('[data-del]') && cur) return once(() => cur.remove());
+      if (e.target.closest('[data-skip]') && cur) return once(() => cur.skip());
       if (e.target.closest('[data-open-rec]') && cur) { const id = cur.draft.recurring_id; B.sheet.close(); return B.openRecurringSheet(id); }
     });
     el.addEventListener('input', (e) => {
@@ -47,7 +55,7 @@
       const n = e.target.dataset.in;
       if (n && cur && cur.change) cur.change(n, e.target);
     });
-    el.addEventListener('submit', (e) => { e.preventDefault(); if (cur) cur.submit(); });
+    el.addEventListener('submit', (e) => { e.preventDefault(); if (cur) once(() => cur.submit()); });
     el.addEventListener('close', () => { if (!el.open) cur = null; }); // o evento chega depois: se outra folha já abriu, o formulário novo não pode ser zerado
   }
   B.wireSheets = wire;
@@ -171,7 +179,7 @@
         '<div id="cat-hint">' + catHint(d) + '</div>';
       h += '<div class="field"><span>Cartão</span><div class="opts row">' +
         '<button type="button" class="opt" aria-pressed="' + (!d.card_id) + '" data-f="card_id" data-v=""><i class="dot" style="--c:var(--muted)"></i>' + F.CASH_NAME + '</button>' +
-        S.data.cards.map((c) => '<button type="button" class="opt" aria-pressed="' + (d.card_id === c.id) + '" data-f="card_id" data-v="' + c.id + '"><i class="dot" style="--c:' + esc(c.color) + '"></i>' + esc(c.name) + '</button>').join('') +
+        S.data.cards.map((c) => '<button type="button" class="opt" aria-pressed="' + (d.card_id === c.id) + '" data-f="card_id" data-v="' + c.id + '"><i class="dot" style="--c:' + esc(F.safeColor(c.color)) + '"></i>' + esc(c.name) + '</button>').join('') +
         '<button type="button" class="opt add" data-f="new-card">+ Novo cartão</button></div></div>' +
         '<div id="card-note">' + cardNote(d) + '</div>';
     }
@@ -880,7 +888,7 @@
           h += '<div class="field"><span>Nicho</span><div class="opts" data-keep-scroll>' + cats.map((c) =>
             '<button type="button" class="opt" aria-pressed="' + (d.category === c.key) + '" data-f="category" data-v="' + esc(c.key) + '"><span class="e">' + esc(c.emoji) + '</span>' + esc(c.name) + '</button>').join('') + '</div></div>';
           h += '<div class="field"><span>Cartão</span><div class="opts row"><button type="button" class="opt" aria-pressed="' + (!d.card_id) + '" data-f="card_id" data-v=""><i class="dot" style="--c:var(--muted)"></i>' + F.CASH_NAME + '</button>' +
-            S.data.cards.map((c) => '<button type="button" class="opt" aria-pressed="' + (d.card_id === c.id) + '" data-f="card_id" data-v="' + c.id + '"><i class="dot" style="--c:' + esc(c.color) + '"></i>' + esc(c.name) + '</button>').join('') + '</div></div>';
+            S.data.cards.map((c) => '<button type="button" class="opt" aria-pressed="' + (d.card_id === c.id) + '" data-f="card_id" data-v="' + c.id + '"><i class="dot" style="--c:' + esc(F.safeColor(c.color)) + '"></i>' + esc(c.name) + '</button>').join('') + '</div></div>';
         }
         const billedRec = !isIn && F.isBilled(B.card(d.card_id));
         if (billedRec) h += '<p class="hint">Entra na fatura do cartão, no dia ' + esc(d.day) + ' de cada mês. A renda que paga é a da fatura.</p>';

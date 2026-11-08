@@ -21,7 +21,7 @@
       <ul>
         <li>O Bolso é um app gratuito de controle financeiro pessoal. Não vende nada e não tem anúncio.</li>
         <li>Guardamos o seu e-mail, a sua senha (criptografada) e os lançamentos que você digita.</li>
-        <li>Os dados ficam no Supabase, em servidores em São Paulo. Pelo app, só a sua conta acessa os seus lançamentos.</li>
+        <li>Os dados ficam no Supabase, em servidores em São Paulo. Pelo app, só a sua conta acessa os seus lançamentos. A única exceção é a divisão de conta, que é opcional: a compra que você dividir com a pessoa vinculada aparece para ela (seção 4).</li>
         <li>Não usamos cookies de rastreamento, estatísticas nem anúncios.</li>
         <li>Você pode baixar tudo e apagar tudo quando quiser, dentro do app.</li>
         <li>Para qualquer pedido sobre os seus dados, fale com <span class="contato">o contato de quem te passou o link do app</span>.</li>
@@ -39,6 +39,7 @@
         <li><b>Cadastro:</b> e-mail e senha. A senha é guardada de forma criptografada pelo Supabase, e ninguém consegue ler a sua senha.</li>
         <li><b>Aceite:</b> a data e a hora em que você aceitou estes termos e a versão deles, para provar o aceite.</li>
         <li><b>O que você lança:</b> descrição, valor, data, nicho, apelido de cartão (nunca o número), contas fixas, parcelas e se saiu do salário ou do vale.</li>
+        <li><b>Dividir conta (opcional):</b> o nome que você escreve ao convidar uma pessoa e o nome que ela escolhe, o apelido que você dá a ela, e, para cada compra que você divide, a parte dela e a situação do pedido (esperando, aceito, recusado, pago, recebido). O e-mail que você digita no convite só serve para achar a conta dela na hora e não é guardado no vínculo.</li>
         <li><b>Dados técnicos:</b> como em qualquer site, quem entrega o app vê o endereço IP e o navegador de quem acessa (veja a seção 4). O login também gera registros de acesso no Supabase.</li>
       </ul>
       <p>Não pedimos CPF, número de cartão, senha de banco, localização, contatos nem fotos. Por favor, não digite esses dados nas descrições.</p>
@@ -54,6 +55,7 @@
       <h2 id="s4">4. Com quem os dados passam</h2>
       <ul>
         <li><b>Supabase:</b> guarda o banco de dados e cuida do login. O projeto do Bolso fica na região de São Paulo. A Supabase e os fornecedores dela (como a Amazon Web Services) podem tratar dados também fora do Brasil, com as garantias do contrato de tratamento de dados que vale ao aceitar os termos dela. Os e-mails de confirmação e de recuperação de senha também saem pela Supabase.</li>
+        <li><b>A pessoa vinculada (só se você usar "Mais, Dividir contas"):</b> quando você divide uma compra, ela passa a ver só aquele pedido: a descrição, a parte dela, o nome e a cor do cartão, o vencimento da fatura (ou a data da compra), o número da parcela e o nicho que você sugeriu. Ela não vê os seus outros lançamentos, cartões, rendas, etiquetas nem o valor total da compra. O mesmo vale para você, no que ela enviar. Ao aceitar o convite, cada um vê o nome que o outro escreveu. Nada é enviado sem você escolher a pessoa e marcar a divisão.</li>
         <li><b>GitHub Pages:</b> hospeda os arquivos do app. Não recebe os seus lançamentos, só vê que o site foi aberto.</li>
         <li><b>jsDelivr:</b> entrega ao seu navegador a biblioteca de login do Supabase. Vê o acesso (endereço IP), não vê os seus lançamentos.</li>
       </ul>
@@ -73,6 +75,7 @@
         <li><b>Lançamentos, cartões, nichos e contas fixas:</b> até você apagar (botão "Apagar todos os dados") ou excluir a conta (botão "Excluir minha conta").</li>
         <li><b>Cópia no navegador:</b> até você sair da conta ou limpar os dados do navegador.</li>
       </ul>
+      <p><b>Divisão de conta:</b> o pedido que você recusar ou cancelar fica só como aviso até a outra pessoa tocar em "Entendi". Quem desfaz o vínculo (em Mais, Dividir contas) apaga os pedidos que ainda não foram respondidos; os que já foram aceitos continuam valendo para os dois, porque viraram uma conta da outra pessoa. Se você apagar os seus dados ou excluir a conta, os pedidos que você enviou somem do app da outra pessoa. Se a outra pessoa excluir a conta dela, os pedidos que ela recebeu de você também somem.</p>
       <p>Ao tocar em "Excluir minha conta", o seu login e todos os seus dados são apagados do banco do app na hora, sem precisar pedir a ninguém. Se preferir fazer o pedido por fora do app, removemos o seu cadastro e os seus lançamentos em até 15 dias.</p>
     </section>
 
@@ -85,7 +88,7 @@
 
     <section aria-labelledby="s8">
       <h2 id="s8">8. Segurança</h2>
-      <p>A conexão é protegida (HTTPS), a senha é criptografada e o banco tem regras que limitam cada conta aos próprios lançamentos. O app não guarda a chave secreta do banco. Nenhum sistema é 100% seguro: use uma senha só para o Bolso e não digite dados sensíveis nas descrições.</p>
+      <p>A conexão é protegida (HTTPS), a senha é criptografada e o banco tem regras que limitam cada conta aos próprios lançamentos e, na divisão de conta, só aos pedidos em que ela é uma das duas pessoas. Quem recebe um pedido não consegue mudar o valor nem a descrição que você mandou, e você não consegue mudar o nicho nem a baixa que ela marcou. O app não guarda a chave secreta do banco. Nenhum sistema é 100% seguro: use uma senha só para o Bolso e não digite dados sensíveis nas descrições.</p>
       <p>Se houver um incidente que traga risco ou dano relevante, avisamos você e a ANPD dentro do prazo da lei.</p>
     </section>
 
@@ -114,6 +117,7 @@
 
     <section aria-labelledby="s12">
       <h2 id="s12">12. Histórico</h2>
+      <p>Versão 2026-11-08: entrou a divisão de conta com a pessoa vinculada. Quando você divide uma compra, ela vê a descrição, a parte dela, o cartão e o vencimento daquele pedido (seção 4).</p>
       <p>Versão 2026-11-06: primeira versão.</p>
     </section>
 

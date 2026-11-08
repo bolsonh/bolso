@@ -387,7 +387,7 @@
         id: uid(), kind: 'despesa', description: o.description, amount: c / 100,
         date, month, category: o.category || null, card_id: o.card_id || null, source,
         paid, skipped: false,
-        recurring_id: null, group_id: group, installment_no: i + 1, installments_total: o.n,
+        recurring_id: null, group_id: group, installment_no: i + 1, installments_total: o.n, tag: tagClean(o.tag) || null,
       };
     });
   }
@@ -450,6 +450,79 @@
     const series = [];
     for (let i = 0; i < count; i++) { const m = addMonths(fromMonth, i); series.push({ month: m, value: (sums.get(m) || 0) / 100 }); }
     return { series, later: { count: later.count, amount: later.cents / 100 } };
+  }
+
+  /* ---------- Etiquetas: um nome que junta gastos de cartões e meses diferentes (uma viagem, uma reforma) ---------- */
+
+  /** Nome da etiqueta como a pessoa digitou, limpo: sem # na frente, sem espaço sobrando, até 40 letras. */
+  function tagClean(s) {
+    return String(s == null ? '' : s).replace(/^[#\s]+/, '').replace(/\s+/g, ' ').trim().slice(0, 40).trim();
+  }
+
+  /** Chave para comparar etiquetas: "Viagem Gramado", "viagem  gramado" e "Víagem gramado" são a mesma. */
+  function tagKey(s) {
+    return tagClean(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  }
+
+  /** Se já existe uma etiqueta igual (ignorando maiúscula e acento), usa a grafia que já existe; senão, a digitada. */
+  function tagResolve(txs, text) {
+    const name = tagClean(text);
+    if (!name) return '';
+    const k = tagKey(name);
+    for (let i = txs.length - 1; i >= 0; i--) {
+      const t = txs[i];
+      if (t.tag && tagKey(t.tag) === k) return tagClean(t.tag);
+    }
+    return name;
+  }
+
+  /** O valor do gasto que conta para a pessoa, em centavos. Hoje é o valor todo. */
+  function ownCents(t) { return toCents(t.amount); }
+
+  /**
+   * Todas as etiquetas em uso, da mais recente para a mais antiga.
+   * Cada uma traz: key, name, count, total (centavos), paid (centavos já pagos), pending (centavos que faltam),
+   * firstMonth, lastMonth e lastDate. Lançamento pulado não conta.
+   */
+  function tagList(txs) {
+    const map = new Map();
+    for (const t of txs) {
+      if (t.skipped || !t.tag) continue;
+      const k = tagKey(t.tag);
+      if (!k) continue;
+      let e = map.get(k);
+      if (!e) { e = { key: k, name: tagClean(t.tag), count: 0, total: 0, paid: 0, pending: 0, firstMonth: t.month, lastMonth: t.month, lastDate: t.date }; map.set(k, e); }
+      const c = ownCents(t);
+      e.count++; e.total += c;
+      if (t.paid) e.paid += c; else e.pending += c;
+      if (t.month < e.firstMonth) e.firstMonth = t.month;
+      if (t.month > e.lastMonth) e.lastMonth = t.month;
+      if (t.date >= e.lastDate) { e.lastDate = t.date; e.name = tagClean(t.tag); }
+    }
+    return [...map.values()].sort((a, b) => (a.lastDate < b.lastDate ? 1 : a.lastDate > b.lastDate ? -1 : a.name < b.name ? -1 : 1));
+  }
+
+  /** Uma etiqueta por dentro: os lançamentos em ordem de data, o total de cada mês e o total de cada cartão. */
+  function tagDetail(txs, key) {
+    const info = tagList(txs).find((e) => e.key === key);
+    if (!info) return null;
+    const rows = txs.filter((t) => !t.skipped && t.tag && tagKey(t.tag) === key)
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id < b.id ? -1 : 1));
+    const months = new Map(), cards = new Map();
+    for (const t of rows) {
+      const c = ownCents(t);
+      const m = months.get(t.month) || { month: t.month, cents: 0, rows: [] };
+      m.cents += c; m.rows.push(t); months.set(t.month, m);
+      const ck = t.card_id || '_dinheiro';
+      const cd = cards.get(ck) || { key: ck, cents: 0, count: 0 };
+      cd.cents += c; cd.count++; cards.set(ck, cd);
+    }
+    return {
+      info,
+      months: [...months.values()].sort((a, b) => (a.month < b.month ? -1 : 1)),
+      cards: [...cards.values()].sort((a, b) => b.cents - a.cents),
+      rows,
+    };
   }
 
   /* ---------- Saldo que passa de um mês para o seguinte ---------- */
@@ -805,7 +878,7 @@
 
   function toCSV(txs, o) {
     const q = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
-    const head = ['Data', 'Mês', 'Tipo', 'Descrição', 'Valor', 'Nicho', 'Cartão', 'Fonte', 'Situação', 'Fixa', 'Parcela'];
+    const head = ['Data', 'Mês', 'Tipo', 'Descrição', 'Valor', 'Nicho', 'Cartão', 'Fonte', 'Situação', 'Fixa', 'Parcela', 'Etiqueta'];
     const srcName = (k) => (SOURCES.find((s) => s.key === k) || { name: k }).name;
     const rows = txs.slice().sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)).map((t) => [
       t.date, t.month, t.kind === 'receita' ? 'Entrada' : 'Saída', t.description,
@@ -814,6 +887,7 @@
       t.skipped ? 'Pulada' : t.paid ? (t.kind === 'receita' ? 'Recebido' : 'Pago') : (t.kind === 'receita' ? 'A receber' : 'Pendente'),
       t.recurring_id ? 'Sim' : 'Não',
       t.installments_total ? t.installment_no + '/' + t.installments_total : '',
+      t.tag || '',
     ].map(q).join(';'));
     return '﻿' + [head.map(q).join(';')].concat(rows).join('\r\n');
   }
@@ -825,7 +899,7 @@
     toCents, parseMoney, fmtBRL, fmtNum, fmtCompact, splitInstallments,
     pad, todayStr, monthOf, dayOf, addMonths, monthDiff, daysInMonth, dateIn, rangeMonths,
     monthLabel, monthName, monthShort, dayLabel, uid,
-    categoryInfo, descKey, guessCategory, instanceOf, missingRecurring, buildInstallments, installmentFromText, installmentPlans, installmentMonths, openingOf, carryOver,
+    categoryInfo, descKey, guessCategory, instanceOf, missingRecurring, buildInstallments, installmentFromText, installmentPlans, installmentMonths, tagClean, tagKey, tagResolve, tagList, tagDetail, ownCents, openingOf, carryOver,
     isBilled, invoiceOf, invoiceDates, placeOnInvoice, invoices, incomeOptions, suggestPaySource, incomeForDate, chargeDate, dayInt,
     cycleOf, cycleDates, payDate, cycleView, cycleStatus, incomeSummary, dayNumber, stampDate, lateEntries,
     live, summarize, rankBy, byCategory, byCard, monthlySeries, spendingWhen, dowOf, buildInsights, toCSV,

@@ -959,10 +959,113 @@
     return '﻿' + [head.map(q).join(';')].concat(rows).join('\r\n');
   }
 
+
+  /* ---------- Validação de dados que vêm de fora (backup importado, cor de cartão de outra conta) ---------- */
+
+  const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+  /** Cor aceita no estilo da tela: só #rrggbb. Qualquer outra coisa (CSS solto, url(), var()) cai na cor neutra. */
+  function safeColor(v, fallback) {
+    return typeof v === 'string' && HEX_COLOR.test(v) ? v.toLowerCase() : (fallback === undefined ? 'var(--muted)' : fallback);
+  }
+
+  /** Regra de senha nova: 8 a 72 caracteres, com letra e número. Devolve a frase do problema, ou '' se a senha serve. */
+  function passwordProblem(p) {
+    const s = String(p == null ? '' : p);
+    if (s.length < 8) return 'A senha precisa ter pelo menos 8 caracteres.';
+    if (s.length > 72) return 'A senha pode ter no máximo 72 caracteres.';
+    if (!/[A-Za-z\u00C0-\u017F]/.test(s) || !/\d/.test(s)) return 'Use letras e números na senha.';
+    return '';
+  }
+
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const KEY_RE = /^[A-Za-z0-9_-]{1,64}$/;
+  const LIMITS = { text: 200, name: 60, emoji: 16, amountMax: 9999999999.99, rows: 20000 };
+
+  function cleanText(v, max, required) {
+    if (v == null || v === '') return required ? undefined : null;
+    if (typeof v !== 'string') return undefined;
+    const t = v.replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
+    if (!t) return required ? undefined : null;
+    return t.length > max ? undefined : t;
+  }
+  function cleanInt(v, min, max, required) {
+    if (v == null || v === '') return required ? undefined : null;
+    const n = typeof v === 'number' ? v : (typeof v === 'string' && /^-?\d+$/.test(v.trim()) ? Number(v) : NaN);
+    return Number.isInteger(n) && n >= min && n <= max ? n : undefined;
+  }
+  function cleanMoney(v, required) {
+    if (v == null || v === '') return required ? undefined : null;
+    const n = typeof v === 'number' ? v : (typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v.trim()) ? Number(v) : NaN);
+    return Number.isFinite(n) && n >= 0 && n <= LIMITS.amountMax ? Math.round(n * 100) / 100 : undefined;
+  }
+  function cleanDate(v) {
+    if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return undefined;
+    const y = Number(v.slice(0, 4)), m = Number(v.slice(5, 7)), d = Number(v.slice(8, 10));
+    if (y < 2000 || y > 2100) return undefined;
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d ? v : undefined;
+  }
+  function cleanMonth(v) {
+    return typeof v === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(v) && Number(v.slice(0, 4)) >= 2000 && Number(v.slice(0, 4)) <= 2100 ? v : undefined;
+  }
+  // Banco (Supabase) exige UUID; o modo local aceita também ids simples e seguros (letras, números, "-" e "_"), que nunca viram marcação.
+  const cleanId = (v, required, loose) => (v == null || v === '' ? (required ? undefined : null) : (typeof v === 'string' && UUID_RE.test(v) ? v.toLowerCase() : (loose && typeof v === 'string' && KEY_RE.test(v) ? v : undefined)));
+  const cleanEnum = (v, list, required, dflt) => (v == null || v === '' ? (required ? dflt : null) : (list.includes(v) ? v : undefined));
+  const cleanBool = (v, dflt) => (v == null ? dflt : (v === true || v === false ? v : undefined));
+  const cleanStamp = (v) => (typeof v === 'string' && v.length <= 40 && !Number.isNaN(Date.parse(v)) ? v : null);
+
+  /**
+   * Confere uma linha de backup antes de ir para o banco ou para a tela.
+   * Devolve { row } com os campos limpos, ou { skip: 'motivo' } quando a linha não presta.
+   * Texto nunca é "consertado" para parecer HTML: o app escapa na hora de desenhar; aqui só garante tipo, tamanho e formato.
+   */
+  function cleanRow(table, r, opts) {
+    const loose = !!(opts && opts.looseIds);
+    if (!r || typeof r !== 'object' || Array.isArray(r)) return { skip: 'linha inválida' };
+    const o = { id: cleanId(r.id, true, loose) };
+    if (o.id === undefined) return { skip: 'identificador inválido' };
+    const bad = (k) => ({ skip: 'campo "' + k + '" inválido' });
+    const fail = (pairs) => { for (const [k, v] of pairs) if (v === undefined) return bad(k); return null; };
+    if (table === 'cards') {
+      Object.assign(o, {
+        name: cleanText(r.name, LIMITS.name, true), kind: cleanEnum(r.kind, ['credito', 'debito'], true, 'credito'),
+        color: r.color == null || r.color === '' ? '#2a78d6' : (typeof r.color === 'string' && HEX_COLOR.test(r.color) ? r.color.toLowerCase() : undefined),
+        closing_day: cleanInt(r.closing_day, 1, 31, false), due_day: cleanInt(r.due_day, 1, 31, false),
+        pay_source: cleanEnum(r.pay_source, ['salario', 'vale', 'outra'], false),
+      });
+    } else if (table === 'categories') {
+      const em = cleanText(r.emoji, LIMITS.emoji, false);
+      if (typeof em === 'string' && /[<>&"'`\\]/.test(em)) return bad('emoji');
+      Object.assign(o, { name: cleanText(r.name, LIMITS.name, true), emoji: em === undefined ? undefined : (em || '📦') });
+    } else if (table === 'recurring') {
+      const cat = r.category == null || r.category === '' ? null : (typeof r.category === 'string' && KEY_RE.test(r.category) ? r.category : undefined);
+      Object.assign(o, {
+        kind: cleanEnum(r.kind, ['despesa', 'receita'], true), description: cleanText(r.description, LIMITS.text, true),
+        amount: cleanMoney(r.amount, true), day: cleanInt(r.day, 1, 31, true), category: cat, card_id: cleanId(r.card_id, false, loose),
+        source: cleanEnum(r.source, ['salario', 'vale', 'outra'], true, 'salario'), month_offset: cleanInt(r.month_offset == null ? 0 : r.month_offset, 0, 1, true),
+        start_month: cleanMonth(r.start_month), active: cleanBool(r.active, true),
+      });
+    } else if (table === 'transactions') {
+      const cat = r.category == null || r.category === '' ? null : (typeof r.category === 'string' && KEY_RE.test(r.category) ? r.category : undefined);
+      Object.assign(o, {
+        kind: cleanEnum(r.kind, ['despesa', 'receita'], true), description: cleanText(r.description, LIMITS.text, true),
+        amount: cleanMoney(r.amount, true), date: cleanDate(r.date), month: cleanMonth(r.month), category: cat, card_id: cleanId(r.card_id, false, loose),
+        source: cleanEnum(r.source, ['salario', 'vale', 'outra', 'definir'], true, 'salario'),
+        paid: cleanBool(r.paid, true), skipped: cleanBool(r.skipped, false), recurring_id: cleanId(r.recurring_id, false, loose), group_id: cleanId(r.group_id, false, loose),
+        installment_no: cleanInt(r.installment_no, 1, 999, false), installments_total: cleanInt(r.installments_total, 1, 999, false),
+        tag: cleanText(r.tag, LIMITS.name, false), split_with: cleanText(r.split_with, LIMITS.name, false),
+        split_share: cleanMoney(r.split_share, false), split_paid: cleanBool(r.split_paid, null), created_at: cleanStamp(r.created_at),
+      });
+    } else return { skip: 'tabela desconhecida' };
+    const f = fail(Object.entries(o));
+    if (f) return f;
+    return { row: o };
+  }
+
   const TERMS_VERSION = '2026-11-08'; // troque ao mudar a política ou os termos: todo mundo aceita de novo
 
   const Fin = {
-    CATEGORIES, SOURCES, CASH_NAME, TERMS_VERSION,
+    CATEGORIES, SOURCES, CASH_NAME, TERMS_VERSION, safeColor, cleanRow, passwordProblem, IMPORT_LIMITS: LIMITS,
     toCents, parseMoney, fmtBRL, fmtNum, fmtCompact, splitInstallments,
     pad, todayStr, monthOf, dayOf, addMonths, monthDiff, daysInMonth, dateIn, rangeMonths,
     monthLabel, monthName, monthShort, dayLabel, uid,

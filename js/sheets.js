@@ -64,7 +64,7 @@
     return Object.assign({
       id: null, kind: kind || 'despesa', amountText: '', description: '', date: B.today(),
       category: null, card_id: null, source: 'salario', repeat: 'once', n: 2,
-      nextMonth: false, paid: true, paidTouched: false, cardTouched: false, sourceTouched: false,
+      nextMonth: false, paid: true, paidTouched: false, cardTouched: false, sourceTouched: false, catTouched: false, catFrom: '',
       recurring_id: null, group_id: null, installment_no: null, installments_total: null, skipped: false,
     }, base || {});
   }
@@ -164,7 +164,8 @@
       const cats = F.CATEGORIES.concat(S.data.categories.map((c) => ({ key: c.id, emoji: c.emoji, name: c.name })));
       h += '<div class="field"><span>Nicho</span><div class="opts" data-keep-scroll>' + cats.map((c) =>
         '<button type="button" class="opt" aria-pressed="' + (d.category === c.key) + '" data-f="category" data-v="' + esc(c.key) + '"><span class="e">' + esc(c.emoji) + '</span>' + esc(c.name) + '</button>').join('') +
-        '<button type="button" class="opt add" data-f="new-cat">+ Novo nicho</button></div></div>';
+        '<button type="button" class="opt add" data-f="new-cat">+ Novo nicho</button></div></div>' +
+        '<div id="cat-hint">' + catHint(d) + '</div>';
       h += '<div class="field"><span>Cartão</span><div class="opts row">' +
         '<button type="button" class="opt" aria-pressed="' + (!d.card_id) + '" data-f="card_id" data-v=""><i class="dot" style="--c:var(--muted)"></i>' + F.CASH_NAME + '</button>' +
         S.data.cards.map((c) => '<button type="button" class="opt" aria-pressed="' + (d.card_id === c.id) + '" data-f="card_id" data-v="' + c.id + '"><i class="dot" style="--c:' + esc(c.color) + '"></i>' + esc(c.name) + '</button>').join('') +
@@ -224,13 +225,30 @@
       : n + ' parcelas: ' + F.fmtBRL(first) + ' e as últimas de ' + F.fmtBRL(last) + ' (diferença de centavos).' + where;
   }
 
+  /** Nicho sugerido pela descrição: o que a pessoa usou antes em lançamento igual ou parecido. Escolha dela vale mais. */
+  function suggestNiche(d) {
+    if (d.kind !== 'despesa' || d.id || d.catTouched) return false;
+    const valid = new Set(F.CATEGORIES.map((c) => c.key).concat(S.data.categories.map((c) => c.id)));
+    const g = F.guessCategory(S.data.transactions, d.description, valid);
+    const cat = g ? g.category : null, from = g ? g.from : '';
+    if (cat === d.category && from === d.catFrom) return false;
+    d.category = cat; d.catFrom = from;
+    return true;
+  }
+  const catHint = (d) => (d.catFrom && !d.catTouched ? '<p class="hint">Nicho sugerido pelo seu lançamento <b>' + esc(d.catFrom) + '</b>. Toque em outro para trocar.</p>' : '');
+  /** Atualiza só os botões de nicho e a dica, sem refazer a tela (refazer no meio do toque perde o clique). */
+  function paintNiche(d) {
+    document.querySelectorAll('#sheet [data-f="category"]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === d.category)));
+    const h = B.$('#cat-hint');
+    if (h) h.innerHTML = catHint(d);
+  }
+
   function autofill(d) {
     const key = d.description.trim().toLowerCase();
     if (!key || d.id) return false;
     const prev = S.data.transactions.slice().reverse().find((t) => t.kind === d.kind && t.description.trim().toLowerCase() === key);
     if (!prev) return false;
     let changed = false;
-    if (d.kind === 'despesa' && !d.category && prev.category) { d.category = prev.category; changed = true; }
     if (!d.cardTouched && d.kind === 'despesa' && d.card_id !== prev.card_id) { d.card_id = prev.card_id; changed = true; }
     if (d.kind === 'receita' && !d.sourceTouched && d.source !== prev.source) { d.source = prev.source; changed = true; } // gasto: a renda vem da data
     if (!F.parseMoney(d.amountText) > 0 && prev.amount > 0 && d.repeat !== 'installments') { d.amountText = F.fmtNum(prev.amount); changed = true; }
@@ -245,12 +263,13 @@
 
   function openTxSheet(kind, base) {
     const d = newTxDraft(kind, base);
+    if (d.category) d.catTouched = true; // veio pronto: a sugestão não troca
     const ctrl = {
       draft: d,
       render: () => txRender(d),
       field(name, v) {
-        if (name === 'kind') { d.kind = v; if (v === 'receita') { d.category = null; if (d.repeat === 'installments') d.repeat = 'once'; } if (!d.sourceTouched) d.source = 'salario'; return redraw(); }
-        if (name === 'category') { d.category = v; return redraw(); }
+        if (name === 'kind') { d.kind = v; if (v === 'receita') { d.category = null; d.catFrom = ''; if (d.repeat === 'installments') d.repeat = 'once'; } else suggestNiche(d); if (!d.sourceTouched) d.source = 'salario'; return redraw(); }
+        if (name === 'category') { d.category = v; d.catTouched = true; d.catFrom = ''; return redraw(); }
         if (name === 'card_id') { d.card_id = v || null; d.cardTouched = true; return redraw(); }
         if (name === 'source') { d.source = v; d.sourceTouched = true; return redraw(); }
         if (name === 'repeat') { d.repeat = v; return redraw(); }
@@ -261,7 +280,7 @@
       },
       input(name, el) {
         if (name === 'amount') d.amountText = el.value;
-        if (name === 'desc') d.description = el.value;
+        if (name === 'desc') { d.description = el.value; if (suggestNiche(d)) paintNiche(d); }
         if (name === 'date') {
           d.date = el.value;
           const cb = B.$('[data-in="paid"]');
@@ -283,7 +302,7 @@
         if (name === 'paid') { d.paid = el.checked; d.paidTouched = true; }
         if (name === 'next') d.nextMonth = el.checked;
         if (name === 'amount') { const v = F.parseMoney(el.value); if (v > 0) { d.amountText = F.fmtNum(v); el.value = d.amountText; } }
-        if (name === 'desc' && autofill(d)) redraw();
+        if (name === 'desc') { const sug = suggestNiche(d); if (autofill(d)) redraw(); else if (sug) paintNiche(d); }
       },
       async submit() {
         fixRepeat(d);

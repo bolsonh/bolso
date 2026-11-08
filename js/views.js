@@ -115,12 +115,21 @@
 
   /* ---------- Resumo ---------- */
 
+  /** Linha "Veio do mês anterior": o saldo que passou, com sinal, e se ainda é previsão (o mês anterior não acabou). */
+  function carryNote(amount, label, provisional) {
+    return '<p class="note">' + label + ': <b class="' + (amount < 0 ? 'neg' : '') + '">' + (amount < 0 ? '\u2212' : '+') + '\u00a0' + brl(Math.abs(amount)).replace(' ', '\u00a0') + '</b>' +
+      (provisional ? ' (previsto)' : '') + '. Já está no valor de cima.</p>';
+  }
+
   V.resumo = function () {
     const m = S.month, T = S.data.transactions;
     const sum = F.summarize(T, m);
     const brandNew = !T.length && !S.data.cards.length && !S.data.recurring.length;
-    const neg = sum.sobra < 0;
-    const heroTxt = F.fmtNum(Math.abs(sum.sobra));
+    const opening = F.openingOf(B.settings());
+    const carry = F.carryOver(T, m, opening);
+    const sobra = carry.has ? (F.toCents(sum.sobra) + F.toCents(carry.amount)) / 100 : sum.sobra; // o que veio do mês anterior já entra na conta
+    const neg = sobra < 0;
+    const heroTxt = F.fmtNum(Math.abs(sobra));
 
     let html = monthHead();
     if (brandNew) {
@@ -139,6 +148,7 @@
       '<dl class="trio"><div><dt>Entrou</dt><dd class="num">' + brl(sum.receitas) + '</dd></div>' +
       '<div><dt>Saiu</dt><dd class="num">' + brl(sum.despesas) + '</dd></div>' +
       '<div><dt>Falta pagar</dt><dd class="num">' + brl(sum.faltaPagar) + '</dd></div></dl>' +
+      (carry.has ? carryNote(carry.amount, opening && m === carry.start ? 'Saldo inicial' : 'Veio do mês anterior', F.addMonths(m, -1) >= B.curMonth()) : '') +
       (sum.faltaReceber > 0 ? '<p class="note">Inclui ' + brl(sum.faltaReceber) + ' que ainda vão cair na conta.</p>' : '') +
       '</section>';
 
@@ -326,9 +336,10 @@
     const endM = byRenda ? B.anaCycle() : S.month;
     const months = F.rangeMonths(endM, n);
     // Por renda: os lançamentos são vistos por mês de renda (gasto conta quando é pago, a fatura no vencimento) e podem ser filtrados por renda.
-    let T = S.data.transactions, sum = null, st = null, src = '';
+    let T = S.data.transactions, sum = null, st = null, src = '', cycleAll = null;
     if (byRenda) {
       const view = F.cycleView(T, S.data.cards);
+      cycleAll = view;
       sum = F.incomeSummary(view, months);
       src = S.ana.src;
       if (src && !(sum.fontes[src] && (sum.fontes[src].recebi > 0 || sum.fontes[src].gastei > 0))) src = '';
@@ -384,12 +395,17 @@
       const who = src
         ? B.srcName(src) + (n === 1 ? ' de ' + F.monthName(endM).toLowerCase() : '')
         : (n === 1 ? 'rendas de ' + F.monthName(endM).toLowerCase() : 'rendas somadas');
-      const neg = row.sobra < 0, sobraTxt = F.fmtNum(Math.abs(row.sobra));
+      // Um mês de renda, rendas somadas: o que sobrou (ou faltou) no mês anterior passa para este
+      const opening = F.openingOf(B.settings());
+      const carry = n === 1 && !src ? F.carryOver(cycleAll, endM, opening) : { amount: 0, has: false, start: '' };
+      const sobra = carry.has ? (F.toCents(row.sobra) + F.toCents(carry.amount)) / 100 : row.sobra;
+      const neg = sobra < 0, sobraTxt = F.fmtNum(Math.abs(sobra));
       html += '<section class="hero-block"><p class="lbl">' + (neg ? icon('alert', 'xs neg') + ' Faltou' : 'Sobra') + ' · ' + esc(who) + '</p>' +
         '<p class="hero' + (sobraTxt.length > 10 ? ' long' : '') + (neg ? ' neg' : '') + '"><small>R$</small>' + sobraTxt + '</p>' +
         '<dl class="trio"><div><dt>Recebi</dt><dd class="num">' + brl(row.recebi) + '</dd></div>' +
         '<div><dt>Gastei</dt><dd class="num">' + brl(row.gastei) + '</dd></div>' +
         '<div><dt>Falta pagar</dt><dd class="num">' + brl(row.faltaPagar) + '</dd></div></dl>' +
+        (carry.has ? carryNote(carry.amount, opening && endM === carry.start ? 'Saldo inicial' : 'Veio do mês de renda anterior', F.cycleDates(F.addMonths(endM, -1)).end >= today) : '') +
         (row.faltaReceber > 0 ? '<p class="note">Inclui ' + brl(row.faltaReceber) + ' que ainda vão cair na conta.</p>' : '') +
         '<p class="note">' + avgLabel + ' ' + brl(avg) + '. Fixas ' + brl(fixed) + '.</p></section>';
     } else {
@@ -611,6 +627,25 @@
     return html;
   };
 
+  /** Saldo com que a pessoa começou a usar o Bolso (dinheiro ou dívida de antes): entra no saldo do primeiro mês e passa adiante. */
+  function openingSection() {
+    const op = F.openingOf(B.settings());
+    const cur = B.curMonth();
+    const firstData = S.data.transactions.reduce((m, t) => (!t.skipped && t.month && (!m || t.month < m) ? t.month : m), '');
+    const sel = op ? op.month : (firstData || cur);
+    const months = [];
+    for (let i = -24; i <= 1; i++) months.push(F.addMonths(cur, i));
+    if (!months.includes(sel)) months.unshift(sel);
+    return '<section class="plain" id="opening"><h2>Saldo com que comecei</h2>' +
+      '<p class="muted-text">Tinha dinheiro, ou dívida, de antes de usar o Bolso? Informe aqui. Ele entra no saldo do mês em que você começou e passa para os meses seguintes. Se não tinha nada, deixe em branco.</p>' +
+      (op ? '<p class="callout">Hoje: <b>' + (op.amount < 0 ? 'dívida de ' : 'dinheiro de ') + brl(Math.abs(op.amount)) + '</b> no começo de ' + esc(F.monthLabel(op.month).toLowerCase()) + '.</p>' : '') +
+      '<label class="field"><span>Valor</span><span class="money"><i>R$</i><input id="f-open-amt" inputmode="decimal" placeholder="0,00" value="' + (op ? esc(F.fmtNum(Math.abs(op.amount))) : '') + '" aria-label="Valor do saldo inicial"></span></label>' +
+      '<label class="field"><span>Era</span><select id="f-open-sign"><option value="mais"' + (op && op.amount < 0 ? '' : ' selected') + '>Dinheiro que eu tinha</option><option value="menos"' + (op && op.amount < 0 ? ' selected' : '') + '>Dívida que eu tinha</option></select></label>' +
+      '<label class="field"><span>No começo de</span><select id="f-open-month">' + months.map((m) => '<option value="' + m + '"' + (m === sel ? ' selected' : '') + '>' + esc(F.monthLabel(m)) + '</option>').join('') + '</select></label>' +
+      '<p class="form-err" id="open-err" role="alert"></p>' +
+      '<div class="stack"><button type="button" class="btn primary" data-act="save-opening">Salvar saldo inicial</button>' + (op ? '<button type="button" class="btn" data-act="remove-opening">Remover</button>' : '') + '</div></section>';
+  }
+
   V.dados = function () {
     let html = backHead('Dados e backup');
     html += '<div class="stack lead">' +
@@ -620,6 +655,7 @@
       '<input type="file" id="file-backup" accept="application/json,.json" hidden></div>' +
       '<p class="muted-text">O backup serve também para levar os dados do modo local para o Supabase: entre no modo Supabase e use "Restaurar de um backup".</p>' +
       '<p class="muted-text">Os seus direitos sobre os dados (baixar, corrigir, apagar e excluir a conta) estão nesta tela. Para tirar dúvidas, veja a <a href="privacidade.html" target="_blank" rel="noopener">política de privacidade</a>.</p>' +
+      openingSection() +
       '<section class="plain danger-zone"><h2>Apagar tudo</h2><p class="muted-text">Remove todos os lançamentos, cartões, contas fixas e nichos ' + (S.store.mode === 'local' ? 'deste aparelho' : 'da sua conta no Supabase') + '. Não tem como desfazer; baixe o backup antes.</p>' +
       '<button type="button" class="btn danger" data-act="wipe">Apagar todos os dados</button></section>' +
       // só existe conta no modo Supabase; no modo local os dados ficam no aparelho e "Apagar tudo" já resolve
@@ -710,6 +746,26 @@
     await S.store.wipe();
     await B.reload();
     B.toast('Tudo apagado.');
+    B.render();
+  });
+  A['save-opening'] = () => B.guard(async () => {
+    const raw = B.$('#f-open-amt').value.trim();
+    const err = (t) => { B.$('#open-err').textContent = t; };
+    err('');
+    if (!raw) {
+      if (!F.openingOf(B.settings())) return err('Digite o valor do saldo que você tinha.');
+      return err('Para tirar o saldo inicial, toque em Remover.');
+    }
+    const v = F.parseMoney(raw);
+    if (!(v > 0)) return err('Digite um valor maior que zero, sem sinal. Para dívida, escolha "Dívida que eu tinha".');
+    const valor = B.$('#f-open-sign').value === 'menos' ? -v : v;
+    await B.saveSettings({ saldo_inicial: { mes: B.$('#f-open-month').value, valor } });
+    B.toast('Saldo inicial salvo.');
+    B.render();
+  });
+  A['remove-opening'] = () => B.guard(async () => {
+    await B.saveSettings({ saldo_inicial: null });
+    B.toast('Saldo inicial removido.');
     B.render();
   });
   A['delete-account'] = () => B.guard(async () => {

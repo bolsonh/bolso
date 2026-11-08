@@ -49,7 +49,7 @@
   }
 
   /** Colunas por mês, uma série, destaque no mês escolhido. */
-  function columns(series, highlight) {
+  function columns(series, highlight, label) {
     // series: [{month: 'AAAA-MM', value}]
     const max = niceMax(Math.max.apply(null, series.map((s) => s.value)));
     const ticks = [1, 0.5, 0];
@@ -62,7 +62,7 @@
         '<i></i>' + (hi && s.value > 0 ? '<b class="num">' + F.fmtCompact(s.value) + '</b>' : '') + '</button>';
     }).join('');
     const xs = series.map((s) => '<span class="' + (s.month === highlight ? 'hi' : '') + '">' + F.monthShort(s.month) + '</span>').join('');
-    const table = '<details class="tbl"><summary>Ver como tabela</summary><table><thead><tr><th>Mês</th><th class="r">Despesas</th></tr></thead><tbody>' +
+    const table = '<details class="tbl"><summary>Ver como tabela</summary><table><thead><tr><th>Mês</th><th class="r">' + esc(label || 'Despesas') + '</th></tr></thead><tbody>' +
       series.map((s) => '<tr><td>' + F.monthLabel(s.month) + '</td><td class="r num">' + F.fmtBRL(s.value) + '</td></tr>').join('') + '</tbody></table></details>';
     return '<div class="cols' + (series.length > 8 ? ' dense' : '') + '" style="--n:' + series.length + '"><div class="cols-plot">' + grid + '<div class="cols-bars">' + cols + '</div></div>' +
       '<div class="cols-x"><div class="cols-x-in">' + xs + '</div></div></div>' + table;

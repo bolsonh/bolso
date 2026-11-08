@@ -7,7 +7,7 @@
 
   const S = (B.S = {
     store: null,
-    data: { cards: [], categories: [], recurring: [], transactions: [] },
+    data: { cards: [], categories: [], recurring: [], transactions: [], settings: {} },
     month: F.monthOf(F.todayStr()),
     route: 'resumo',
     sub: '',
@@ -138,6 +138,14 @@
   /* ---------- Gravação (grava primeiro; só atualiza a tela se deu certo) ---------- */
 
   B.reload = async () => { S.data = await S.store.load(); };
+  B.settings = () => S.data.settings || {};
+  /** Grava configurações (valor null apaga) e guarda na tela. */
+  B.saveSettings = async (patch) => {
+    await S.store.saveSettings(patch);
+    const next = Object.assign({}, B.settings(), patch);
+    for (const k of Object.keys(next)) if (next[k] == null) delete next[k];
+    S.data.settings = next;
+  };
 
   /** Carimbo de lançamento para o que o sistema cria sozinho (conta fixa, backup): conta como lançado no próprio dia,
       então nunca vira "ajuste" de mês fechado. Dia que ainda não chegou usa o momento de agora. */
@@ -300,6 +308,7 @@
       categories: S.data.categories.map((r) => pick('categories', r)),
       recurring: S.data.recurring.map((r) => pick('recurring', r)),
       transactions: S.data.transactions.map((r) => pick('transactions', r)),
+      settings: B.settings(),
     },
   }, null, 2);
 
@@ -319,6 +328,9 @@
       if (rows.length) await S.store.insert(t, rows);
       added[t] = rows.length;
     }
+    // saldo inicial: só entra se a pessoa ainda não tem um
+    const op = F.openingOf(obj.data.settings);
+    if (op && !F.openingOf(B.settings())) { await B.saveSettings({ saldo_inicial: { mes: op.month, valor: op.amount } }); added.settings = 1; }
     await B.reload();
     return added;
   };

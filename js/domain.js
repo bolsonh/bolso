@@ -364,14 +364,20 @@
 
   /* ---------- Parcelas ---------- */
 
+  /**
+   * Cria as parcelas de uma compra. startNo (opcional) é a parcela em que a pessoa já está:
+   * começa nela, na data informada, e as de antes não entram (já passaram).
+   */
   function buildInstallments(o) {
     const parts = splitInstallments(toCents(o.totalAmount), o.n);
     const group = uid();
     const startMonth = monthOf(o.firstDate);
     const day = dayOf(o.firstDate);
     const billed = isBilled(o.card);
-    return parts.map((c, i) => {
-      const date = dateIn(addMonths(startMonth, i), day);
+    const startNo = Math.min(Math.max(parseInt(o.startNo, 10) || 1, 1), o.n);
+    return parts.slice(startNo - 1).map((c, j) => {
+      const i = startNo - 1 + j;
+      const date = dateIn(addMonths(startMonth, j), day);
       let month = monthOf(date), source = o.source, paid = date <= o.today;
       if (billed) { // cartão com fatura: cada parcela cai na fatura da sua data
         const pl = placeOnInvoice(o.card, date, o.txs || [], o.today);
@@ -384,6 +390,66 @@
         recurring_id: null, group_id: group, installment_no: i + 1, installments_total: o.n,
       };
     });
+  }
+
+  /** Lê "3/10" ou "3 de 10" na descrição: parcela atual e total. Devolve o nome sem esse trecho. */
+  function installmentFromText(text) {
+    const s = String(text || '');
+    const m = /(^|[\s(\-\u2013])(\d{1,2})\s*(?:\/|de)\s*(\d{1,2})(?=$|[\s).,;])/i.exec(s);
+    if (!m) return null;
+    const no = Number(m[2]), total = Number(m[3]);
+    if (!(total >= 2 && total <= 60 && no >= 1 && no <= total)) return null;
+    const name = (s.slice(0, m.index) + ' ' + s.slice(m.index + m[0].length)).replace(/\s+/g, ' ').replace(/^[\s\-\u2013(),;:]+|[\s\-\u2013(),;:]+$/g, '');
+    return { no, total, name };
+  }
+
+  /**
+   * Compras parceladas, uma por compra (junta os cartões), para a tela de parcelas.
+   * Cada uma traz quantas já foram pagas, qual é a próxima, quanto falta e quando termina.
+   * Parcelas de antes do registro (a compra foi lançada já na 3 de 10) contam como pagas.
+   */
+  function installmentPlans(txs) {
+    const groups = new Map();
+    for (const t of txs) {
+      if (t.kind !== 'despesa' || t.skipped || !t.group_id || !(Number(t.installments_total) >= 2)) continue;
+      if (!groups.has(t.group_id)) groups.set(t.group_id, []);
+      groups.get(t.group_id).push(t);
+    }
+    const sum = (list) => list.reduce((c, r) => c + toCents(r.amount), 0) / 100;
+    const plans = [];
+    for (const [id, rows] of groups) {
+      rows.sort((a, b) => a.installment_no - b.installment_no);
+      const first = rows[0], last = rows[rows.length - 1];
+      const n = Math.max.apply(null, rows.map((r) => Number(r.installments_total)));
+      const open = rows.filter((r) => !r.paid);
+      const next = open[0] || null;
+      const before = Math.max(0, Number(first.installment_no) - 1);
+      plans.push({
+        id, rows, n, description: first.description, card_id: first.card_id || null, category: first.category || null,
+        paidNo: before + rows.length - open.length, next, nextNo: next ? Number(next.installment_no) : n,
+        remaining: open.length, remainingAmount: sum(open), total: sum(rows),
+        nextAmount: (next || last).amount, nextMonth: next ? next.month : null, lastMonth: last.month, done: !next,
+      });
+    }
+    return plans.sort((a, b) => (a.done - b.done) || String(a.nextMonth).localeCompare(String(b.nextMonth)) || a.description.localeCompare(b.description, 'pt-BR'));
+  }
+
+  /** Quanto de parcela cai em cada mês, de fromMonth em diante. O que está atrasado entra no primeiro mês. */
+  function installmentMonths(plans, fromMonth, count) {
+    const sums = new Map();
+    const later = { count: 0, cents: 0 };
+    const end = addMonths(fromMonth, count - 1);
+    for (const p of plans) {
+      for (const r of p.rows) {
+        if (r.paid) continue;
+        const m = r.month < fromMonth ? fromMonth : r.month;
+        if (m > end) { later.count++; later.cents += toCents(r.amount); continue; }
+        sums.set(m, (sums.get(m) || 0) + toCents(r.amount));
+      }
+    }
+    const series = [];
+    for (let i = 0; i < count; i++) { const m = addMonths(fromMonth, i); series.push({ month: m, value: (sums.get(m) || 0) / 100 }); }
+    return { series, later: { count: later.count, amount: later.cents / 100 } };
   }
 
   /* ---------- Somas ---------- */
@@ -728,7 +794,7 @@
     toCents, parseMoney, fmtBRL, fmtNum, fmtCompact, splitInstallments,
     pad, todayStr, monthOf, dayOf, addMonths, monthDiff, daysInMonth, dateIn, rangeMonths,
     monthLabel, monthName, monthShort, dayLabel, uid,
-    categoryInfo, descKey, guessCategory, instanceOf, missingRecurring, buildInstallments,
+    categoryInfo, descKey, guessCategory, instanceOf, missingRecurring, buildInstallments, installmentFromText, installmentPlans, installmentMonths,
     isBilled, invoiceOf, invoiceDates, placeOnInvoice, invoices, incomeOptions, suggestPaySource, incomeForDate, chargeDate, dayInt,
     cycleOf, cycleDates, payDate, cycleView, cycleStatus, incomeSummary, dayNumber, stampDate, lateEntries,
     live, summarize, rankBy, byCategory, byCard, monthlySeries, spendingWhen, dowOf, buildInsights, toCSV,

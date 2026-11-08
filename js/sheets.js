@@ -65,7 +65,7 @@
       id: null, kind: kind || 'despesa', amountText: '', description: '', date: B.today(),
       category: null, card_id: null, source: 'salario', repeat: 'once', n: 2, startNo: '1',
       nextMonth: false, paid: true, paidTouched: false, cardTouched: false, sourceTouched: false, catTouched: false, catFrom: '',
-      recurring_id: null, group_id: null, installment_no: null, installments_total: null, skipped: false,
+      recurring_id: null, group_id: null, installment_no: null, installments_total: null, skipped: false, tag: '',
     }, base || {});
   }
 
@@ -173,6 +173,7 @@
         '<button type="button" class="opt add" data-f="new-card">+ Novo cartão</button></div></div>' +
         '<div id="card-note">' + cardNote(d) + '</div>';
     }
+    if (tagAllowed(d)) h += tagField(d);
     h += '<div id="late-note">' + lateNote(d) + '</div>';
 
     const billed = !!billedOf(d);
@@ -209,6 +210,22 @@
     h += '</div></form>';
     return h;
   }
+
+  /** Etiqueta: só em saída que não é conta fixa (a conta fixa volta todo mês sem etiqueta). */
+  const tagAllowed = (d) => d.kind === 'despesa' && d.repeat !== 'monthly';
+  function tagChips(d) {
+    const cur = F.tagKey(d.tag);
+    return F.tagList(S.data.transactions).slice(0, 6).map((e) =>
+      '<button type="button" class="opt" aria-pressed="' + (cur === e.key) + '" data-f="tag" data-v="' + esc(e.name) + '">' + esc(e.name) + '</button>').join('');
+  }
+  function tagField(d) {
+    const all = F.tagList(S.data.transactions);
+    return '<label class="field"><span>Etiqueta (opcional)</span><input id="f-tag" data-in="tag" list="tag-list" maxlength="40" placeholder="Ex.: Viagem, Reforma" value="' + esc(d.tag) + '"></label>' +
+      '<datalist id="tag-list">' + all.map((e) => '<option value="' + esc(e.name) + '">').join('') + '</datalist>' +
+      (all.length ? '<div class="opts row" id="tag-chips">' + tagChips(d) + '</div>' : '') +
+      '<p class="hint tag-hint">Junta gastos de cartões e meses diferentes, como uma viagem ou uma reforma. Em compra parcelada, vale para todas as parcelas.</p>';
+  }
+  function paintTags(d) { const c = B.$('#tag-chips'); if (c) c.innerHTML = tagChips(d); }
 
   function installHint(d) {
     const total = F.parseMoney(d.amountText);
@@ -284,6 +301,7 @@
       field(name, v) {
         if (name === 'kind') { d.kind = v; if (v === 'receita') { d.category = null; d.catFrom = ''; if (d.repeat === 'installments') d.repeat = 'once'; } else suggestNiche(d); if (!d.sourceTouched) d.source = 'salario'; return redraw(); }
         if (name === 'category') { d.category = v; d.catTouched = true; d.catFrom = ''; return redraw(); }
+        if (name === 'tag') { d.tag = F.tagKey(d.tag) === F.tagKey(v) ? '' : v; const el = B.$('#f-tag'); if (el) el.value = d.tag; return paintTags(d); }
         if (name === 'card_id') { d.card_id = v || null; d.cardTouched = true; return redraw(); }
         if (name === 'source') { d.source = v; d.sourceTouched = true; return redraw(); }
         if (name === 'repeat') { d.repeat = v; return redraw(); }
@@ -304,6 +322,7 @@
       },
       input(name, el) {
         if (name === 'amount') d.amountText = el.value;
+        if (name === 'tag') { d.tag = el.value; paintTags(d); }
         if (name === 'desc') { d.description = el.value; if (suggestNiche(d)) paintNiche(d); const it = B.$('#inst-text'); if (it) it.innerHTML = instTextHint(d); }
         if (name === 'date') {
           d.date = el.value;
@@ -344,6 +363,7 @@
           if (!(k >= 1 && k <= n)) return showErr('A parcela atual vai de 1 a ' + n + '.', '#f-start');
         }
         const description = d.description.trim() || (d.kind === 'despesa' ? B.catName(d.category) : B.srcName(d.source));
+        const tag = tagAllowed(d) ? F.tagResolve(S.data.transactions, d.tag) : '';
         const btn = B.$('#f-save');
         btn.disabled = true;
         const card = billedOf(d);
@@ -356,9 +376,17 @@
             source: place ? place.source : d.source, paid: place ? place.paid : isPaid(d), skipped: d.skipped,
           };
           if (d.id) {
-            await B.updTx(d.id, base);
+            // a coluna da etiqueta só vai para o banco quando a etiqueta mudou
+            const before = F.tagClean((B.findTx(d.id) || {}).tag);
+            const changed = d.kind === 'despesa' && tag !== before;
+            await B.updTx(d.id, changed ? Object.assign({}, base, { tag: tag || null }) : base);
+            // etiqueta é da compra inteira: vale para todas as parcelas
+            if (changed && d.group_id) {
+              const others = S.data.transactions.filter((x) => x.group_id === d.group_id && x.id !== d.id).map((x) => x.id);
+              if (others.length) await B.updTxs(others, { tag: tag || null });
+            }
           } else if (d.repeat === 'installments') {
-            await B.addTxs(F.buildInstallments({ description, totalAmount: amount, n, startNo: parseInt(d.startNo, 10) || 1, firstDate: d.date, category: d.category, card_id: d.card_id, card, txs: S.data.transactions, source: d.source, today: B.today() }));
+            await B.addTxs(F.buildInstallments({ description, totalAmount: amount, n, startNo: parseInt(d.startNo, 10) || 1, firstDate: d.date, category: d.category, card_id: d.card_id, card, txs: S.data.transactions, source: d.source, today: B.today(), tag }));
           } else if (d.repeat === 'monthly') {
             const rec = {
               id: F.uid(), kind: d.kind, description, amount, day: F.dayOf(d.date), category: base.category, card_id: base.card_id,
@@ -366,7 +394,7 @@
             };
             await B.addRecurring(rec, Object.assign({ id: F.uid(), group_id: null, installment_no: null, installments_total: null }, base));
           } else {
-            await B.addTxs([Object.assign({ id: F.uid(), recurring_id: null, group_id: null, installment_no: null, installments_total: null }, base)]);
+            await B.addTxs([Object.assign({ id: F.uid(), recurring_id: null, group_id: null, installment_no: null, installments_total: null, tag: tag || null }, base)]);
           }
           return true;
         });
@@ -413,7 +441,7 @@
     const base = {
       id: t.id, kind: t.kind, amountText: F.fmtNum(t.amount), description: t.description, date: t.date, category: t.category,
       card_id: t.card_id, source: t.source, paid: t.paid, paidTouched: true, nextMonth: t.kind === 'receita' && t.month !== F.monthOf(t.date),
-      recurring_id: t.recurring_id, group_id: t.group_id, installment_no: t.installment_no, installments_total: t.installments_total, skipped: t.skipped, cardTouched: true, sourceTouched: true,
+      recurring_id: t.recurring_id, group_id: t.group_id, installment_no: t.installment_no, installments_total: t.installments_total, skipped: t.skipped, cardTouched: true, sourceTouched: true, tag: t.tag || '',
     };
     openTxSheet(t.kind, base);
   };

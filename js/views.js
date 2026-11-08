@@ -92,7 +92,7 @@
     const pillAct = t.skipped ? 'toggle-skip' : 'toggle-paid';
     const cls = t.skipped ? 'skip' : t.paid ? 'ok' : 'pend';
     return '<div class="tx' + (t.skipped ? ' is-skipped' : '') + '" role="button" tabindex="0" data-act="edit-tx" data-id="' + t.id + '">' +
-      '<span class="ico">' + cat.emoji + '</span>' +
+      '<span class="ico">' + esc(cat.emoji) + '</span>' +
       '<span class="tx-main"><span class="tx-desc">' + esc(t.description) + '</span><span class="tx-meta">' + chips.join('') + '</span></span>' +
       '<span class="tx-side"><b class="num ' + (isIn ? 'in' : 'out') + '">' + (isIn ? '+ ' : '') + brl(t.amount) + '</b>' +
       '<button type="button" class="pill ' + cls + '" data-act="' + pillAct + '" data-id="' + t.id + '">' + (t.paid && !t.skipped ? icon('check', 'xs') : '') + label + '</button></span></div>';
@@ -125,7 +125,7 @@
     if (t.installments_total) chips.push('<span class="chip">' + t.installment_no + '/' + t.installments_total + '</span>');
     if (F.hasSplit(t)) chips.push(splitChip(t));
     return '<div class="tx" role="button" tabindex="0" data-act="edit-tx" data-id="' + t.id + '">' +
-      '<span class="ico">' + cat.emoji + '</span>' +
+      '<span class="ico">' + esc(cat.emoji) + '</span>' +
       '<span class="tx-main"><span class="tx-desc">' + esc(t.description) + '</span><span class="tx-meta">' + chips.join('') + '</span></span>' +
       '<span class="tx-side"><b class="num out">' + brl(t.amount) + '</b></span></div>';
   };
@@ -277,7 +277,7 @@
     const cats = F.byCategory(T, [m]);
     html += '<section><div class="sec-head"><h2>Para onde foi</h2>' + (cats.rows.length ? '<button type="button" class="link-btn" data-act="go" data-to="analises">Análise completa</button>' : '') + '</div>';
     if (!cats.rows.length) html += '<p class="empty-line">Sem despesas neste mês.</p>';
-    else html += C.ranked(cats.rows.slice(0, 5).map((r) => ({ label: B.catName(r.key), lead: '<span class="ico sm">' + B.cat(r.key).emoji + '</span>', value: r.total, pctText: Math.round(r.pct * 100) + '%' }))) + ownShareNote(T.filter((t) => t.kind === 'despesa' && t.month === m));
+    else html += C.ranked(cats.rows.slice(0, 5).map((r) => ({ label: B.catName(r.key), lead: '<span class="ico sm">' + esc(B.cat(r.key).emoji) + '</span>', value: r.total, pctText: Math.round(r.pct * 100) + '%' }))) + ownShareNote(T.filter((t) => t.kind === 'despesa' && t.month === m));
     html += '</section>';
 
     // Parcelas em andamento (todas as compras parceladas, de todos os cartões)
@@ -516,7 +516,7 @@
     }
 
     html += '<section><h2>Para onde foi o dinheiro</h2>' +
-      C.ranked(cats.rows.map((r) => ({ label: B.catName(r.key), lead: '<span class="ico sm">' + B.cat(r.key).emoji + '</span>', value: r.total, pctText: (r.pct > 0 && r.pct < 0.005 ? '<1%' : Math.round(r.pct * 100) + '%') }))) + ownShareNote(exp) + '</section>';
+      C.ranked(cats.rows.map((r) => ({ label: B.catName(r.key), lead: '<span class="ico sm">' + esc(B.cat(r.key).emoji) + '</span>', value: r.total, pctText: (r.pct > 0 && r.pct < 0.005 ? '<1%' : Math.round(r.pct * 100) + '%') }))) + ownShareNote(exp) + '</section>';
 
     html += '<section><h2>Evolução dos gastos</h2>' +
       C.columns(F.monthlySeries(T, endM, Math.max(6, n)).map((x) => ({ month: x.month, value: x.despesas })), endM) +
@@ -594,7 +594,7 @@
 
   V.mais = function () {
     const local = S.store.mode === 'local';
-    const item = (to, ic, title, sub) => '<button type="button" class="list-item" data-act="go" data-to="' + to + '"><span class="ico">' + icon(ic) + '</span><span class="li-text"><b>' + title + '</b><small>' + sub + '</small></span>' + icon('chev', 'end') + '</button>';
+    const item = (to, ic, title, sub) => '<button type="button" class="list-item" data-act="go" data-to="' + to + '"><span class="ico">' + icon(ic) + '</span><span class="li-text"><b>' + esc(title) + '</b><small>' + esc(sub) + '</small></span>' + icon('chev', 'end') + '</button>';
     let html = '<header class="head"><div class="head-title"><h1>Mais</h1></div></header>';
     html += '<div class="list">' +
       item('mais/parcelas', 'layers', 'Parcelas', parcelasSub()) +
@@ -629,7 +629,7 @@
     if (!rec.length) return html + '<p class="empty-box">Nenhuma conta fixa ainda. Cadastre aluguel, internet, salário e vale uma vez só.</p>';
     html += '<div class="list">' + rec.map((r) => {
       const cat = r.kind === 'receita' ? { emoji: '💵' } : B.cat(r.category);
-      return '<button type="button" class="list-item' + (r.active ? '' : ' off') + '" data-act="edit-rec" data-id="' + r.id + '"><span class="ico">' + cat.emoji + '</span>' +
+      return '<button type="button" class="list-item' + (r.active ? '' : ' off') + '" data-act="edit-rec" data-id="' + esc(r.id) + '"><span class="ico">' + esc(cat.emoji) + '</span>' +
         '<span class="li-text"><b>' + esc(r.description) + '</b><small>' + (r.kind === 'receita' ? 'Entrada' : 'Saída') + ', todo dia ' + r.day + (r.month_offset ? ', vale para o mês seguinte' : '') + ', ' + esc(B.srcName(r.source)) +
         (r.card_id ? ', ' + esc(B.cardName(r.card_id)) : '') + (r.active ? '' : ', pausada') + '</small></span><b class="num">' + brl(r.amount) + '</b></button>';
     }).join('') + '</div>';
@@ -648,7 +648,7 @@
     html += '<p class="muted-text lead">Gastos em ' + F.monthName(m).toLowerCase() + ' por cartão. Troque o mês no Resumo para ver outro período.</p>';
     const tot = new Map(F.byCard(S.data.transactions, [m]).rows.map((r) => [r.key, r.total]));
     html += '<div class="list"><div class="list-item static"><span class="ico"><i class="dot lg" style="--c:var(--muted)"></i></span><span class="li-text"><b>' + F.CASH_NAME + '</b><small>Sempre disponível</small></span><b class="num">' + brl(tot.get('_dinheiro') || 0) + '</b></div>' +
-      S.data.cards.map((c) => '<button type="button" class="list-item" data-act="edit-card" data-id="' + c.id + '"><span class="ico"><i class="dot lg" style="--c:' + esc(c.color) + '"></i></span><span class="li-text"><b>' + esc(c.name) + '</b><small>' + cardSub(c) + '</small></span><b class="num">' + brl(tot.get(c.id) || 0) + '</b></button>').join('') + '</div>';
+      S.data.cards.map((c) => '<button type="button" class="list-item" data-act="edit-card" data-id="' + c.id + '"><span class="ico"><i class="dot lg" style="--c:' + esc(F.safeColor(c.color)) + '"></i></span><span class="li-text"><b>' + esc(c.name) + '</b><small>' + cardSub(c) + '</small></span><b class="num">' + brl(tot.get(c.id) || 0) + '</b></button>').join('') + '</div>';
     if (!S.data.cards.length) html += '<p class="empty-box">Cadastre seus cartões para ver quanto cada um está gastando.</p>';
     return html;
   };
@@ -671,7 +671,7 @@
     html += '<p class="muted-text lead">Compras parceladas de todos os cartões, o que falta pagar e quando acaba.</p>';
     if (cardIds.length > 1) {
       html += '<div class="opts row par-filter" role="group" aria-label="Filtrar por cartão"><button type="button" class="opt" aria-pressed="' + (!par.card) + '" data-act="set-par-card" data-v="">Todos</button>' +
-        cardIds.map((id) => { const c = B.card(id); return '<button type="button" class="opt" aria-pressed="' + (par.card === id) + '" data-act="set-par-card" data-v="' + esc(id) + '"><i class="dot" style="--c:' + esc(c ? c.color : 'var(--muted)') + '"></i>' + esc(B.cardName(id)) + '</button>'; }).join('') + '</div>';
+        cardIds.map((id) => { const c = B.card(id); return '<button type="button" class="opt" aria-pressed="' + (par.card === id) + '" data-act="set-par-card" data-v="' + esc(id) + '"><i class="dot" style="--c:' + esc(F.safeColor(c && c.color)) + '"></i>' + esc(B.cardName(id)) + '</button>'; }).join('') + '</div>';
     }
     const left = list.reduce((s, p) => s + p.remainingAmount, 0);
     const ends = list.reduce((m, p) => (p.lastMonth > m ? p.lastMonth : m), '');
@@ -690,7 +690,7 @@
       const where = (B.isBilledTx(p.next) ? 'na fatura de ' : 'em ') + mlabel(p.nextMonth);
       const pct = Math.round((p.paidNo / p.n) * 100);
       return '<li class="plan"><div class="plan-top"><span class="ico sm">' + esc(B.cat(p.category || 'outros').emoji) + '</span><b class="plan-name">' + esc(p.description) + '</b><b class="num">' + brl(p.nextAmount) + '</b></div>' +
-        '<p class="plan-sub"><span class="plan-card"><i class="dot" style="--c:' + esc(card ? card.color : 'var(--muted)') + '"></i>' + esc(B.cardName(p.card_id)) + '</span> ' +
+        '<p class="plan-sub"><span class="plan-card"><i class="dot" style="--c:' + esc(F.safeColor(card && card.color)) + '"></i>' + esc(B.cardName(p.card_id)) + '</span> ' +
         (starts ? 'Começa ' + where : 'Parcela <b>' + p.nextNo + ' de ' + p.n + '</b>, ' + where) + '</p>' +
         '<div class="rank-bar" role="img" aria-label="' + p.paidNo + ' de ' + p.n + ' parcelas pagas"><i style="width:' + pct + '%"></i></div>' +
         '<p class="plan-foot">' + (p.remaining === 1 ? 'Falta 1 parcela' : 'Faltam ' + p.remaining + ' parcelas') + ', ' + brlN(p.remainingAmount) + '. Termina em ' + mlabel(p.lastMonth) + '.</p></li>';
@@ -732,7 +732,7 @@
     if (d.cards.length > 1) {
       html += '<section><h2>Por cartão</h2><div class="list">' + d.cards.map((c) => {
         const card = B.card(c.key);
-        return '<div class="list-item static"><span class="ico"><i class="dot lg" style="--c:' + esc(card ? card.color : 'var(--muted)') + '"></i></span><span class="li-text"><b>' + esc(B.cardName(c.key === '_dinheiro' ? null : c.key)) + '</b><small>' + plural(c.count, 'gasto', 'gastos') + '</small></span><b class="num">' + brl(c.cents / 100) + '</b></div>';
+        return '<div class="list-item static"><span class="ico"><i class="dot lg" style="--c:' + esc(F.safeColor(card && card.color)) + '"></i></span><span class="li-text"><b>' + esc(B.cardName(c.key === '_dinheiro' ? null : c.key)) + '</b><small>' + plural(c.count, 'gasto', 'gastos') + '</small></span><b class="num">' + brl(c.cents / 100) + '</b></div>';
       }).join('') + '</div></section>';
     }
     // um cartão por mês (sem cartão dentro de cartão, que come a largura em tela estreita)

@@ -59,6 +59,7 @@ create table if not exists public.transactions (
   group_id            uuid,
   installment_no      int,
   installments_total  int,
+  tag                 text,                          -- etiqueta que junta gastos de cartões e meses diferentes (uma viagem, uma reforma)
   created_at          timestamptz not null default now()
 );
 

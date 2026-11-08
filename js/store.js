@@ -8,6 +8,7 @@
   const TABLES = ['cards', 'categories', 'recurring', 'transactions'];
   const clone = (x) => JSON.parse(JSON.stringify(x));
   const empty = () => ({ cards: [], categories: [], recurring: [], transactions: [], settings: {} });
+  const needsAccount = () => new Error('Dividir contas com outra pessoa precisa da conta na nuvem (Supabase).');
 
   /* ---------- Modo local ---------- */
 
@@ -84,6 +85,10 @@
         write(d);
       },
       async wipe() { write(empty()); },
+      async loadSocial() { return { shares: [], links: [], social: { ready: false, error: '' } }; },
+      async insertRows() { throw needsAccount(); },
+      async updateRows() { throw needsAccount(); },
+      async rpc() { throw needsAccount(); },
       /** Configurações da pessoa (hoje: o saldo com que começou). Valor null apaga a chave. */
       async saveSettings(patch) {
         const d = read();
@@ -111,6 +116,8 @@
       [/failed to fetch|networkerror|load failed|network request failed/i, 'Sem conexão com o Supabase. Confira a internet e tente de novo.'],
       [/jwt expired|invalid jwt|refresh_token/i, 'Sua sessão expirou. Entre de novo.'],
       [/permission denied|row-level security|violates row-level/i, 'O banco recusou a gravação. Rode o arquivo schema.sql no Supabase e entre de novo.'],
+      [/could not find the (table|function) .*(shares|partner_links|convidar_parceiro|responder_convite|desfazer_vinculo)|relation .*(shares|partner_links).* does not exist/i, 'O banco ainda não tem a divisão de contas. Rode o arquivo supabase/migracao-05-dividir-conta.sql no SQL Editor do Supabase e tente de novo.'],
+      [/could not find the 'split_(with|share|paid)' column|column .*\bsplit_(with|share|paid)\b.* does not exist/i, 'O banco ainda não tem a divisão de contas. Rode o arquivo supabase/migracao-05-dividir-conta.sql no SQL Editor do Supabase e tente de novo.'],
       [/could not find the 'tag' column|column .*\btag\b.* does not exist/i, 'O banco ainda não tem as etiquetas. Rode o arquivo supabase/migracao-04-etiquetas.sql no SQL Editor do Supabase e tente de novo.'],
       [/could not find the '[^']+' column|column .* does not exist|transactions_source_check/i, 'O banco ainda não tem a atualização da fatura do cartão. Rode o arquivo supabase/migracao-02-fatura.sql no SQL Editor do Supabase e tente de novo.'],
       [/could not find the function|pgrst202|excluir_minha_conta/i, 'O banco ainda não tem a função de excluir conta. Rode o arquivo supabase/migracao-03-excluir-conta.sql no SQL Editor do Supabase e tente de novo.'],
@@ -153,16 +160,32 @@
       return out;
     }
 
-    const numeric = (r) => (r && r.amount != null ? Object.assign(r, { amount: Number(r.amount) }) : r);
+    const numeric = (r) => {
+      if (!r) return r;
+      if (r.amount != null) r.amount = Number(r.amount);
+      if (r.split_share != null) r.split_share = Number(r.split_share);
+      if (r.prev_amount != null) r.prev_amount = Number(r.prev_amount);
+      return r;
+    };
 
     // As configurações ficam nos dados do próprio usuário (user_metadata), junto do aceite dos termos: não precisa de tabela nova.
-    const SETTING_KEYS = ['saldo_inicial'];
+    const SETTING_KEYS = ['saldo_inicial', 'parceiro_apelido', 'meu_nome'];
     async function settingsOf() {
       const { data } = await client.auth.getSession();
       const meta = (data && data.session && data.session.user && data.session.user.user_metadata) || {};
       const out = {};
       for (const k of SETTING_KEYS) if (meta[k] != null) out[k] = meta[k];
       return out;
+    }
+
+    /** Vínculo e pedidos de divisão. Se o banco ainda não tem a atualização 05, o app segue sem a divisão e explica na tela. */
+    async function socialOf() {
+      try {
+        const [shares, links] = await Promise.all([fetchAll('shares', ['created_at', 'id']), fetchAll('partner_links', ['created_at', 'id'])]);
+        return { shares: shares.map(numeric), links, social: { ready: true, error: '' } };
+      } catch (e) {
+        return { shares: [], links: [], social: { ready: false, error: (e && e.message) || '' } };
+      }
     }
 
     return {
@@ -181,7 +204,8 @@
           fetchAll('recurring', ['created_at', 'id']),
           fetchAll('transactions', ['date', 'id']),
         ]);
-        return { cards, categories, recurring: recurring.map(numeric), transactions: transactions.map(numeric), settings: await settingsOf() };
+        const social = await socialOf();
+        return Object.assign({ cards, categories, recurring: recurring.map(numeric), transactions: transactions.map(numeric), settings: await settingsOf() }, social);
       },
       async insert(table, rows) {
         if (!rows.length) return rows;
@@ -190,6 +214,19 @@
         }
         return rows;
       },
+      async loadSocial() { return socialOf(); },
+      /** Grava e devolve as linhas como o banco guardou (com o dono e o estado que o banco decidiu). */
+      async insertRows(table, rows) {
+        const out = [];
+        for (let i = 0; i < rows.length; i += 200) out.push(...ok(await client.from(table).insert(rows.slice(i, i + 200)).select()));
+        return out.map(numeric);
+      },
+      async updateRows(table, ids, patch) {
+        const out = [];
+        for (let i = 0; i < ids.length; i += 200) out.push(...ok(await client.from(table).update(patch).in('id', ids.slice(i, i + 200)).select()));
+        return out.map(numeric);
+      },
+      async rpc(name, args) { return ok(await client.rpc(name, args || {})); },
       async insertIgnore(table, rows) {
         if (!rows.length) return [];
         for (let i = 0; i < rows.length; i += 500) {
@@ -220,7 +257,9 @@
         for (const t of ['transactions', 'recurring', 'categories', 'cards']) {
           ok(await client.from(t).delete().not('id', 'is', null));
         }
-        ok(await client.auth.updateUser({ data: { saldo_inicial: null } }));
+        // os pedidos que você mandou; os que você recebeu e aceitou continuam sendo da outra pessoa
+        try { ok(await client.from('shares').delete().not('id', 'is', null)); } catch (e) { /* banco sem a atualização 05: não há pedidos */ }
+        ok(await client.auth.updateUser({ data: { saldo_inicial: null, parceiro_apelido: null, meu_nome: null } }));
       },
       async saveSettings(patch) {
         const data = {};

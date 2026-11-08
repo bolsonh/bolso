@@ -63,7 +63,7 @@
   function newTxDraft(kind, base) {
     return Object.assign({
       id: null, kind: kind || 'despesa', amountText: '', description: '', date: B.today(),
-      category: null, card_id: null, source: 'salario', repeat: 'once', n: 2,
+      category: null, card_id: null, source: 'salario', repeat: 'once', n: 2, startNo: '1',
       nextMonth: false, paid: true, paidTouched: false, cardTouched: false, sourceTouched: false, catTouched: false, catFrom: '',
       recurring_id: null, group_id: null, installment_no: null, installments_total: null, skipped: false,
     }, base || {});
@@ -157,7 +157,8 @@
     h += '<label class="field"><span>Valor' + (d.repeat === 'installments' ? ' total da compra' : '') + '</span><span class="money"><i>R$</i>' +
       '<input id="f-amount" data-in="amount" inputmode="decimal" placeholder="0,00" value="' + esc(d.amountText) + '" aria-label="Valor em reais"></span></label>';
     h += '<label class="field"><span>Descrição</span><input id="f-desc" data-in="desc" list="desc-list" maxlength="80" placeholder="' + (isIn ? 'Ex.: Salário, Freela' : 'Ex.: Mercado, Uber, Netflix') + '" value="' + esc(d.description) + '"></label>' +
-      '<datalist id="desc-list">' + descSuggestions().map((x) => '<option value="' + esc(x) + '">').join('') + '</datalist>';
+      '<datalist id="desc-list">' + descSuggestions().map((x) => '<option value="' + esc(x) + '">').join('') + '</datalist>' +
+      '<div id="inst-text">' + instTextHint(d) + '</div>';
     h += '<label class="field"><span>' + (isIn ? 'Data em que cai' : 'Data') + '</span><input id="f-date" data-in="date" type="date" value="' + esc(d.date) + '"></label>';
 
     if (!isIn) {
@@ -184,6 +185,7 @@
       if (!inst) h += '<div class="field"><span>Repetição</span>' + seg('repeat', [['once', 'Só esta vez'], ['monthly', 'Todo mês']], d.repeat) + '</div>';
       if (inst) {
         h += '<label class="field"><span>Em quantas vezes?</span><input id="f-n" data-in="n" type="number" inputmode="numeric" min="2" max="60" value="' + esc(d.n) + '"></label>' +
+          '<label class="field"><span>Em qual parcela você está?</span><input id="f-start" data-in="start" type="number" inputmode="numeric" min="1" max="60" value="' + esc(d.startNo) + '"></label>' +
           '<p class="hint" id="inst-hint">' + installHint(d) + '</p>';
       } else if (d.repeat === 'monthly') {
         h += '<p class="hint" id="rep-hint">Entra sozinha todo mês, no dia ' + (d.date ? F.dayOf(d.date) : '') + ', como pendente. Para parar, pause em Mais, Contas fixas.</p>';
@@ -211,18 +213,30 @@
   function installHint(d) {
     const total = F.parseMoney(d.amountText);
     const n = parseInt(d.n, 10);
+    const k = parseInt(d.startNo, 10) || 1;
     if (!(total > 0) || !(n >= 2)) return 'Informe o valor total e o número de parcelas.';
     if (n > 60) return 'Use de 2 a 60 parcelas.';
-    const parts = F.splitInstallments(F.toCents(total), n);
-    const first = parts[0] / 100, last = parts[n - 1] / 100;
-    let where = d.date ? ' A primeira vence em ' + F.dayLabel(d.date) + '.' : '';
+    if (k < 1 || k > n) return 'A parcela atual vai de 1 a ' + n + '.';
+    const parts = F.splitInstallments(F.toCents(total), n).slice(k - 1); // só as que faltam
+    const cnt = parts.length, first = parts[0] / 100, last = parts[cnt - 1] / 100;
+    const which = k === 1 ? 'A primeira' : 'A parcela ' + k;
+    let where = d.date ? ' ' + which + ' vence em ' + F.dayLabel(d.date) + '.' : '';
     const card = billedOf(d);
     if (card && d.date) { // cartão com fatura: cada parcela cai numa fatura, uma por mês
-      const ps = F.buildInstallments({ description: 'x', totalAmount: total, n, firstDate: d.date, card, txs: S.data.transactions, source: 'definir', today: B.today() });
-      where = ' A primeira cai na fatura de ' + F.monthName(ps[0].month).toLowerCase() + ' e a última na de ' + F.monthName(ps[n - 1].month).toLowerCase() + '.';
+      const ps = F.buildInstallments({ description: 'x', totalAmount: total, n, startNo: k, firstDate: d.date, card, txs: S.data.transactions, source: 'definir', today: B.today() });
+      where = ' ' + which + ' cai na fatura de ' + F.monthName(ps[0].month).toLowerCase() + ' e a última na de ' + F.monthName(ps[cnt - 1].month).toLowerCase() + '.';
     }
-    return first === last ? n + 'x de ' + F.fmtBRL(first) + '.' + where
-      : n + ' parcelas: ' + F.fmtBRL(first) + ' e as últimas de ' + F.fmtBRL(last) + ' (diferença de centavos).' + where;
+    const lead = k === 1 ? '' : 'Você está na parcela ' + k + ' de ' + n + ': o Bolso lança as ' + cnt + ' que faltam (as de antes não entram). ';
+    return lead + (first === last ? cnt + 'x de ' + F.fmtBRL(first) + '.' + where
+      : cnt + ' parcelas: ' + F.fmtBRL(first) + ' e as últimas de ' + F.fmtBRL(last) + ' (diferença de centavos).' + where);
+  }
+
+  /** Descrição como "Netflix 3/10": o 3/10 é a parcela atual, não o nome. Oferece lançar como parcelada. */
+  function instTextHint(d) {
+    if (d.id || d.kind !== 'despesa' || d.repeat === 'installments' || !canInstall(d)) return '';
+    const it = F.installmentFromText(d.description);
+    if (!it) return '';
+    return '<p class="hint">Parece a parcela <b>' + it.no + ' de ' + it.total + '</b>. <button type="button" class="link-btn" data-f="from-text">Lançar como parcelada, na parcela ' + it.no + ' de ' + it.total + '</button> (o valor que você digitou vale para cada parcela).</p>';
   }
 
   /** Nicho sugerido pela descrição: o que a pessoa usou antes em lançamento igual ou parecido. Escolha dela vale mais. */
@@ -274,13 +288,23 @@
         if (name === 'source') { d.source = v; d.sourceTouched = true; return redraw(); }
         if (name === 'repeat') { d.repeat = v; return redraw(); }
         if (name === 'parcelado') { d.repeat = v === 'sim' ? 'installments' : 'once'; return redraw(); }
+        if (name === 'from-text') { // "Netflix 3/10": parcela 3 de 10; o valor digitado é o de cada parcela
+          const it = F.installmentFromText(d.description);
+          if (!it) return;
+          const each = F.parseMoney(d.amountText);
+          d.repeat = 'installments'; d.n = String(it.total); d.startNo = String(it.no);
+          if (it.name) d.description = it.name;
+          if (each > 0) d.amountText = F.fmtNum(Math.round(each * it.total * 100) / 100);
+          if (it.name) suggestNiche(d);
+          return redraw();
+        }
         if (name === 'new-card') return openCardSheet(null, d);
         if (name === 'cfg-card') return openCardSheet(d.card_id, d);
         if (name === 'new-cat') return openCategorySheet(d);
       },
       input(name, el) {
         if (name === 'amount') d.amountText = el.value;
-        if (name === 'desc') { d.description = el.value; if (suggestNiche(d)) paintNiche(d); }
+        if (name === 'desc') { d.description = el.value; if (suggestNiche(d)) paintNiche(d); const it = B.$('#inst-text'); if (it) it.innerHTML = instTextHint(d); }
         if (name === 'date') {
           d.date = el.value;
           const cb = B.$('[data-in="paid"]');
@@ -296,7 +320,8 @@
           if (rh && d.date) rh.textContent = 'Entra sozinha todo mês, no dia ' + F.dayOf(d.date) + ', como pendente. Para parar, pause em Mais, Contas fixas.';
         }
         if (name === 'n') d.n = el.value;
-        if (name === 'amount' || name === 'n' || name === 'date') { const h = B.$('#inst-hint'); if (h) h.textContent = installHint(d); }
+        if (name === 'start') d.startNo = el.value;
+        if (name === 'amount' || name === 'n' || name === 'start' || name === 'date') { const h = B.$('#inst-hint'); if (h) h.textContent = installHint(d); }
       },
       change(name, el) {
         if (name === 'paid') { d.paid = el.checked; d.paidTouched = true; }
@@ -315,6 +340,8 @@
         if (d.repeat === 'installments') {
           n = parseInt(d.n, 10);
           if (!(n >= 2 && n <= 60)) return showErr('Use de 2 a 60 parcelas.', '#f-n');
+          const k = parseInt(d.startNo, 10) || 1;
+          if (!(k >= 1 && k <= n)) return showErr('A parcela atual vai de 1 a ' + n + '.', '#f-start');
         }
         const description = d.description.trim() || (d.kind === 'despesa' ? B.catName(d.category) : B.srcName(d.source));
         const btn = B.$('#f-save');
@@ -331,7 +358,7 @@
           if (d.id) {
             await B.updTx(d.id, base);
           } else if (d.repeat === 'installments') {
-            await B.addTxs(F.buildInstallments({ description, totalAmount: amount, n, firstDate: d.date, category: d.category, card_id: d.card_id, card, txs: S.data.transactions, source: d.source, today: B.today() }));
+            await B.addTxs(F.buildInstallments({ description, totalAmount: amount, n, startNo: parseInt(d.startNo, 10) || 1, firstDate: d.date, category: d.category, card_id: d.card_id, card, txs: S.data.transactions, source: d.source, today: B.today() }));
           } else if (d.repeat === 'monthly') {
             const rec = {
               id: F.uid(), kind: d.kind, description, amount, day: F.dayOf(d.date), category: base.category, card_id: base.card_id,

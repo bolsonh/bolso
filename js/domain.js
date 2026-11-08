@@ -452,6 +452,37 @@
     return { series, later: { count: later.count, amount: later.cents / 100 } };
   }
 
+  /* ---------- Saldo que passa de um mês para o seguinte ---------- */
+
+  /** Saldo com que a pessoa começou ({ mes: 'AAAA-MM', valor }; negativo é dívida), ou null se não informou. */
+  function openingOf(settings) {
+    const o = settings && settings.saldo_inicial;
+    if (!o || !/^\d{4}-(0[1-9]|1[0-2])$/.test(String(o.mes)) || !Number.isFinite(Number(o.valor)) || Number(o.valor) === 0) return null;
+    return { month: o.mes, amount: Math.round(Number(o.valor) * 100) / 100 };
+  }
+
+  /**
+   * Quanto veio do mês anterior: a soma do que sobrou (ou faltou) em cada mês desde o começo.
+   * list traz lançamentos com month = o período (mês comum, ou mês de renda via cycleView).
+   * O começo é o mês do saldo inicial, se a pessoa informou, ou o primeiro mês que tem lançamento.
+   * Devolve { amount, start, has }: has é falso quando não há nada para passar.
+   */
+  function carryOver(list, month, opening) {
+    const net = new Map();
+    let first = '';
+    for (const t of list) {
+      if (t.skipped || !t.month) continue;
+      net.set(t.month, (net.get(t.month) || 0) + (t.kind === 'receita' ? 1 : -1) * toCents(t.amount));
+      if (!first || t.month < first) first = t.month;
+    }
+    const start = opening ? opening.month : first;
+    if (!start || month < start) return { amount: 0, start: start || '', has: false };
+    let c = opening ? toCents(opening.amount) : 0;
+    let m = start;
+    for (let i = 0; m < month && i < 600; i++) { c += net.get(m) || 0; m = addMonths(m, 1); }
+    return { amount: c / 100, start, has: c !== 0 };
+  }
+
   /* ---------- Somas ---------- */
 
   const live = (txs) => txs.filter((t) => !t.skipped);
@@ -794,7 +825,7 @@
     toCents, parseMoney, fmtBRL, fmtNum, fmtCompact, splitInstallments,
     pad, todayStr, monthOf, dayOf, addMonths, monthDiff, daysInMonth, dateIn, rangeMonths,
     monthLabel, monthName, monthShort, dayLabel, uid,
-    categoryInfo, descKey, guessCategory, instanceOf, missingRecurring, buildInstallments, installmentFromText, installmentPlans, installmentMonths,
+    categoryInfo, descKey, guessCategory, instanceOf, missingRecurring, buildInstallments, installmentFromText, installmentPlans, installmentMonths, openingOf, carryOver,
     isBilled, invoiceOf, invoiceDates, placeOnInvoice, invoices, incomeOptions, suggestPaySource, incomeForDate, chargeDate, dayInt,
     cycleOf, cycleDates, payDate, cycleView, cycleStatus, incomeSummary, dayNumber, stampDate, lateEntries,
     live, summarize, rankBy, byCategory, byCard, monthlySeries, spendingWhen, dowOf, buildInsights, toCSV,

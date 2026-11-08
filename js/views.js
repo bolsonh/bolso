@@ -28,6 +28,7 @@
     phone: '<rect x="7" y="3" width="10" height="18" rx="2.5"/><path d="M11 18h2"/>',
     chev: '<path d="m9 6 6 6-6 6"/>',
     layers: '<path d="M12 3 3 8l9 5 9-5z"/><path d="m3 13 9 5 9-5"/>',
+    bookmark: '<path d="M6 3h12v18l-6-4-6 4z"/>',
   };
   const icon = (n, cls) => '<svg class="ic ' + (cls || '') + '" viewBox="0 0 24 24" aria-hidden="true">' + ICON[n] + '</svg>';
   B.icon = icon;
@@ -71,6 +72,7 @@
     if (B.isBilledTx(t)) chips.push('<span class="chip">' + icon('card', 'xs') + 'Fatura de ' + F.monthName(t.month).toLowerCase() + '</span>');
     if (t.recurring_id) chips.push('<span class="chip">' + icon('repeat', 'xs') + 'Fixa</span>');
     if (t.installments_total) chips.push('<span class="chip">' + t.installment_no + '/' + t.installments_total + '</span>');
+    if (t.tag && !isIn && !o.noTag) chips.push('<span class="chip tag-chip" title="' + esc(t.tag) + '">' + icon('bookmark', 'xs') + '<span>' + esc(t.tag) + '</span></span>');
     if (isIn && t.month !== F.monthOf(t.date)) chips.push('<span class="chip">Vale para ' + F.monthName(t.month).toLowerCase() + '</span>');
     const label = t.skipped ? 'Pulada' : t.paid ? (isIn ? 'Recebido' : 'Pago') : (isIn ? 'A receber' : 'Pendente');
     const pillAct = t.skipped ? 'toggle-skip' : 'toggle-paid';
@@ -214,14 +216,14 @@
   /* ---------- Extrato ---------- */
 
   function filteredTxs() {
-    const f = S.f, q = f.q.trim().toLowerCase();
+    const f = S.f, q = f.q.trim().toLowerCase(), qk = F.tagKey(q);
     return S.data.transactions.filter((t) => t.month === S.month &&
       (f.kind === 'todos' || (f.kind === 'saidas' ? t.kind === 'despesa' : t.kind === 'receita')) &&
       (!f.card || (f.card === '_dinheiro' ? !t.card_id : t.card_id === f.card)) &&
       (!f.cat || t.category === f.cat) &&
       (!f.src || t.source === f.src) &&
       (!f.status || (f.status === 'pendente' ? !t.paid && !t.skipped : f.status === 'pago' ? t.paid && !t.skipped : t.skipped)) &&
-      (!q || t.description.toLowerCase().includes(q) || (t.kind === 'despesa' && B.catName(t.category).toLowerCase().includes(q))));
+      (!q || t.description.toLowerCase().includes(q) || (t.kind === 'despesa' && B.catName(t.category).toLowerCase().includes(q)) || (qk && t.tag && F.tagKey(t.tag).includes(qk))));
   }
 
   V.extratoList = function () {
@@ -277,7 +279,7 @@
       '<label class="sel"><span>Fonte</span><select data-filter="src">' + opt('', 'Todas', f.src) + F.SOURCES.map((s) => opt(s.key, s.name, f.src)).join('') + '</select></label>' +
       '<label class="sel"><span>Situação</span><select data-filter="status">' + opt('', 'Todas', f.status) + opt('pendente', 'Pendentes', f.status) + opt('pago', 'Pagas ou recebidas', f.status) + opt('pulada', 'Puladas', f.status) + '</select></label>' +
       '</div>';
-    html += '<label class="search"><span class="sr">Buscar</span><input type="search" id="q" data-filter-q placeholder="Buscar por descrição ou nicho" value="' + esc(f.q) + '" autocomplete="off"></label>';
+    html += '<label class="search"><span class="sr">Buscar</span><input type="search" id="q" data-filter-q placeholder="Buscar por descrição, nicho ou etiqueta" value="' + esc(f.q) + '" autocomplete="off"></label>';
     html += '<div id="tx-list">' + V.extratoList() + '</div>';
     return html;
   };
@@ -500,8 +502,8 @@
 
   /* ---------- Mais ---------- */
 
-  function backHead(title, right) {
-    return '<header class="head sub"><button type="button" class="icon-btn" data-act="go" data-to="mais" aria-label="Voltar">' + icon('left') + '</button><h1>' + title + '</h1>' + (right || '') + '</header>';
+  function backHead(title, right, to) {
+    return '<header class="head sub"><button type="button" class="icon-btn" data-act="go" data-to="' + (to || 'mais') + '" aria-label="Voltar">' + icon('left') + '</button><h1>' + title + '</h1>' + (right || '') + '</header>';
   }
 
   const brlN = (v) => brl(v).replace(' ', '\u00a0'); // sem quebrar entre R$ e o número
@@ -521,6 +523,7 @@
       item('mais/fixas', 'repeat', 'Contas fixas', S.data.recurring.filter((r) => r.active).length + ' ativas, voltam todo mês') +
       item('mais/cartoes', 'card', 'Cartões', S.data.cards.length ? S.data.cards.length + (S.data.cards.length === 1 ? ' cartão' : ' cartões') : 'Cadastre os cartões que você usa') +
       item('mais/nichos', 'tag', 'Nichos', F.CATEGORIES.length + ' padrão' + (S.data.categories.length ? ' e ' + S.data.categories.length + ' seus' : '')) +
+      item('mais/etiquetas', 'bookmark', 'Etiquetas', etiquetasSub()) +
       item('mais/dados', 'data', 'Dados e backup', 'Exportar, importar e apagar') +
       '<a class="list-item" href="privacidade.html" target="_blank" rel="noopener"><span class="ico">' + icon('info') + '</span><span class="li-text"><b>Privacidade e termos</b><small>Como tratamos os seus dados</small></span>' + icon('chev', 'end') + '</a></div>';
 
@@ -617,6 +620,48 @@
     return html;
   };
 
+  function etiquetasSub() {
+    const n = F.tagList(S.data.transactions).length;
+    return n ? plural(n, 'etiqueta', 'etiquetas') : 'Junte gastos de cartões e meses diferentes';
+  }
+  const tagSpan = (e) => (e.firstMonth === e.lastMonth ? mlabel(e.firstMonth) : mlabel(e.firstMonth) + ' a ' + mlabel(e.lastMonth));
+
+  /** Etiquetas: um nome que junta gastos de cartões e meses diferentes (uma viagem, uma reforma). */
+  V.etiquetas = function () {
+    const arg = B.parseHash().arg;
+    if (arg) return tagDetailView(arg);
+    const list = F.tagList(S.data.transactions);
+    let html = backHead('Etiquetas');
+    html += '<p class="muted-text lead">Uma etiqueta junta gastos de cartões e meses diferentes sob um nome, como uma viagem ou uma reforma. Escolha a etiqueta ao lançar um gasto.</p>';
+    if (!list.length) return html + '<p class="empty-box">Nenhuma etiqueta ainda. Ao lançar um gasto, escreva o nome no campo Etiqueta, por exemplo "Viagem Gramado". Os próximos gastos dessa viagem é só tocar no nome.</p>';
+    html += '<div class="list">' + list.map((e) =>
+      '<button type="button" class="list-item" data-act="go" data-to="mais/etiquetas/' + encodeURIComponent(e.key) + '"><span class="ico">' + icon('bookmark') + '</span>' +
+      '<span class="li-text"><b>' + esc(e.name) + '</b><small>' + plural(e.count, 'lançamento', 'lançamentos') + ', ' + tagSpan(e) + (e.pending ? '. Falta pagar ' + brlN(e.pending / 100) : '') + '</small></span>' +
+      '<b class="num">' + brl(e.total / 100) + '</b></button>').join('') + '</div>';
+    return html;
+  };
+
+  function tagDetailView(key) {
+    const d = F.tagDetail(S.data.transactions, key);
+    if (!d) return backHead('Etiqueta', '', 'mais/etiquetas') + '<p class="empty-box">Essa etiqueta não existe mais. Ela some quando o último gasto dela é apagado ou trocado de etiqueta.</p>';
+    const i = d.info;
+    let html = backHead(esc(i.name), '', 'mais/etiquetas');
+    html += '<p class="muted-text lead">' + plural(i.count, 'lançamento', 'lançamentos') + ', de ' + tagSpan(i) + '. Soma tudo o que tem essa etiqueta, em qualquer cartão.</p>';
+    html += '<dl class="trio par-sum tag-sum"><div><dt>Total</dt><dd class="num">' + brlN(i.total / 100) + '</dd></div>' +
+      '<div><dt>Já paguei</dt><dd class="num">' + brlN(i.paid / 100) + '</dd></div>' +
+      '<div><dt>Falta pagar</dt><dd class="num">' + brlN(i.pending / 100) + '</dd></div></dl>';
+    if (d.cards.length > 1) {
+      html += '<section><h2>Por cartão</h2><div class="list">' + d.cards.map((c) => {
+        const card = B.card(c.key);
+        return '<div class="list-item static"><span class="ico"><i class="dot lg" style="--c:' + esc(card ? card.color : 'var(--muted)') + '"></i></span><span class="li-text"><b>' + esc(B.cardName(c.key === '_dinheiro' ? null : c.key)) + '</b><small>' + plural(c.count, 'gasto', 'gastos') + '</small></span><b class="num">' + brl(c.cents / 100) + '</b></div>';
+      }).join('') + '</div></section>';
+    }
+    // um cartão por mês (sem cartão dentro de cartão, que come a largura em tela estreita)
+    html += '<h2 class="tag-h2">Mês a mês</h2>' + d.months.map((m) =>
+      '<section class="day"><h3>' + esc(F.monthLabel(m.month)) + '<span class="num">' + brl(m.cents / 100) + '</span></h3>' + m.rows.map((t) => txRow(t, { noTag: true })).join('') + '</section>').join('');
+    return html;
+  }
+
   V.nichos = function () {
     let html = backHead('Nichos', '<button type="button" class="btn small primary" data-act="new-cat">' + icon('plus', 'xs') + 'Novo</button>');
     html += '<p class="muted-text lead">Nichos são os tipos de gasto. Os padrões já cobrem o que a maioria das pessoas mais gasta; crie os seus se precisar.</p>';
@@ -683,14 +728,16 @@
   B.parseHash = function () {
     const parts = (root.location.hash || '').replace(/^#\/?/, '').split('/');
     const r = NAV.some(([id]) => id === parts[0]) ? parts[0] : 'resumo';
-    const sub = r === 'mais' && ['parcelas', 'fixas', 'cartoes', 'nichos', 'dados'].includes(parts[1]) ? parts[1] : '';
-    return { r, sub };
+    const sub = r === 'mais' && ['parcelas', 'fixas', 'cartoes', 'nichos', 'etiquetas', 'dados'].includes(parts[1]) ? parts[1] : '';
+    let arg = '';
+    if (sub === 'etiquetas' && parts[2]) { try { arg = decodeURIComponent(parts[2]); } catch (e) { arg = ''; } }
+    return { r, sub, arg };
   };
 
   B.render = function () {
-    const { r, sub } = B.parseHash();
-    const changed = r !== S.route || sub !== S.sub;
-    S.route = r; S.sub = sub;
+    const { r, sub, arg } = B.parseHash();
+    const changed = r !== S.route || sub !== S.sub || arg !== S.arg;
+    S.route = r; S.sub = sub; S.arg = arg;
     const y = root.scrollY;
     const fn = r === 'mais' && sub ? V[sub] : V[r];
     B.$('#view').innerHTML = fn();

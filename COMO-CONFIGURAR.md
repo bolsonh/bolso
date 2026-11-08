@@ -68,7 +68,7 @@ Depois, já logado no app com Supabase: **Restaurar de um backup** e escolha o a
 
 ## Atualizar um banco que já existe
 
-Quando uma versão nova do app precisa de colunas ou funções novas, ela vem com um arquivo em `supabase/` (por exemplo `migracao-02-fatura.sql` para a fatura do cartão e `migracao-03-excluir-conta.sql` para o botão "Excluir minha conta" e `migracao-04-etiquetas.sql` para as etiquetas).
+Quando uma versão nova do app precisa de colunas ou funções novas, ela vem com um arquivo em `supabase/` (por exemplo `migracao-02-fatura.sql` para a fatura do cartão e `migracao-03-excluir-conta.sql` para o botão "Excluir minha conta", `migracao-04-etiquetas.sql` para as etiquetas e `migracao-05-dividir-conta.sql` para dividir conta com outra pessoa).
 Cole o arquivo no **SQL Editor** do Supabase e clique em **Run**. Ele só acrescenta, não apaga nem altera nenhum dado, e pode ser rodado de novo sem problema.
 Quem criar o banco do zero com `schema.sql` já recebe tudo.
 
@@ -78,3 +78,4 @@ Quem criar o banco do zero com `schema.sql` já recebe tudo.
 - **Backup:** baixe o backup de vez em quando (Mais > Dados e backup). O plano gratuito não tem backup diário.
 - **Sem internet:** o app abre, mas lançar e salvar no modo Supabase exige conexão.
 - **Duas pessoas:** cada conta enxerga só os próprios dados. Para outra pessoa usar, ela cria a própria conta (ligue de novo a opção de cadastro por um momento).
+- **Dividir conta:** depois que as duas contas existem (e a migração 05 foi rodada), uma convida a outra em **Mais, Dividir contas**, pelo e-mail com que a outra se cadastrou. Só o que for dividido aparece para a outra pessoa; o resto continua privado. Só depois disso desligue o cadastro de novos usuários.

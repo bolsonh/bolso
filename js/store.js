@@ -110,7 +110,9 @@
       [/invalid login credentials/i, 'E-mail ou senha incorretos.'],
       [/email not confirmed/i, 'Falta confirmar o e-mail. Abra a mensagem que o Supabase enviou e clique no link.'],
       [/user already registered|already been registered/i, 'Já existe uma conta com esse e-mail. Use Entrar.'],
-      [/password should be at least|weak.?password/i, 'A senha precisa ter pelo menos 6 caracteres.'],
+      [/password should be at least|weak.?password|should contain at least one character/i, 'A senha é fraca demais. Use pelo menos 8 caracteres, com letras e números.'],
+      [/same.?password|different from the old password/i, 'A senha nova precisa ser diferente da atual.'],
+      [/unable to validate email|email.?address.?invalid|invalid format/i, 'Esse e-mail não foi aceito. Confira se digitou certo.'],
       [/signups? not allowed|signup is disabled|signups are disabled/i, 'Novos cadastros estão desligados neste projeto. Entre com a conta que você já criou.'],
       [/rate limit|too many requests|over_email_send_rate_limit/i, 'Muitas tentativas seguidas. Espere alguns minutos e tente de novo.'],
       [/failed to fetch|networkerror|load failed|network request failed/i, 'Sem conexão com o Supabase. Confira a internet e tente de novo.'],
@@ -126,22 +128,33 @@
       [/invalid api key|apikey/i, 'A chave do Supabase em config.js está errada.'],
     ];
     for (const [re, text] of map) if (re.test(msg) || (code && re.test(String(code)))) return new Error(text);
-    return new Error(msg || 'Algo deu errado. Tente de novo.');
+    // Só repassa o texto quando foi o próprio Bolso que escreveu (as funções do banco, em português). O resto do banco ou do login
+    // (nome de tabela, regra violada, detalhe interno) vai para o console e a pessoa vê uma frase simples.
+    if (code === 'P0001' || code === '28000') return new Error(msg);
+    if (/^23\d{3}$/.test(String(code))) return new Error('O banco não aceitou esse dado. Confira o que foi digitado e tente de novo.');
+    return new Error('Algo deu errado. Tente de novo.');
   }
 
-  function loadScript(src) {
+  /** Versão fixa do supabase-js com selo de integridade (SRI): se o CDN trocar o arquivo, o navegador se recusa a rodar. Ao atualizar, mude a versão e o hash juntos. */
+  const SUPABASE_JS = {
+    url: 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0/dist/umd/supabase.js',
+    integrity: 'sha384-uteMfOloLDGt042uDz+xHGF3ym63/WQ6rFq7murQRG8Ih7QrXGEGNtWd8688sb4O',
+  };
+
+  function loadScript(src, integrity) {
     return new Promise((resolve, reject) => {
       const s = root.document.createElement('script');
       s.src = src;
+      if (integrity) { s.integrity = integrity; s.crossOrigin = 'anonymous'; }
       s.onload = resolve;
-      s.onerror = () => reject(new Error('Sem conexão para carregar o Supabase. Confira a internet e tente de novo.'));
+      s.onerror = () => reject(new Error('Não deu para carregar o Supabase. Confira a internet e tente de novo; se continuar, o arquivo pode ter sido alterado e o Bolso se recusa a usá-lo.'));
       root.document.head.appendChild(s);
     });
   }
 
   function SupabaseStore(cfg) {
     let client = null;
-    const libUrl = cfg.SUPABASE_JS_URL || 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js';
+    const libUrl = cfg.SUPABASE_JS_URL || SUPABASE_JS.url;
 
     const ok = (res) => {
       if (res.error) throw friendlyError(res.error);
@@ -191,7 +204,7 @@
     return {
       mode: 'supabase',
       async init() {
-        if (!root.supabase) await loadScript(libUrl);
+        if (!root.supabase) await loadScript(libUrl, cfg.SUPABASE_JS_URL ? null : SUPABASE_JS.integrity);
         if (!root.supabase || !root.supabase.createClient) throw new Error('Não foi possível carregar a biblioteca do Supabase.');
         client = root.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY, {
           auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },

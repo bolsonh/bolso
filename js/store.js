@@ -7,7 +7,7 @@
 
   const TABLES = ['cards', 'categories', 'recurring', 'transactions'];
   const clone = (x) => JSON.parse(JSON.stringify(x));
-  const empty = () => ({ cards: [], categories: [], recurring: [], transactions: [] });
+  const empty = () => ({ cards: [], categories: [], recurring: [], transactions: [], settings: {} });
 
   /* ---------- Modo local ---------- */
 
@@ -23,6 +23,7 @@
         if (raw) {
           const d = JSON.parse(raw);
           for (const t of TABLES) if (!Array.isArray(d[t])) d[t] = [];
+          if (!d.settings || typeof d.settings !== 'object') d.settings = {};
           return d;
         }
       } catch (e) { blocked = true; }
@@ -83,6 +84,14 @@
         write(d);
       },
       async wipe() { write(empty()); },
+      /** Configurações da pessoa (hoje: o saldo com que começou). Valor null apaga a chave. */
+      async saveSettings(patch) {
+        const d = read();
+        const next = Object.assign({}, d.settings || {}, clone(patch));
+        for (const k of Object.keys(next)) if (next[k] == null) delete next[k];
+        d.settings = next;
+        write(d);
+      },
       auth: null,
     };
   }
@@ -145,6 +154,16 @@
 
     const numeric = (r) => (r && r.amount != null ? Object.assign(r, { amount: Number(r.amount) }) : r);
 
+    // As configurações ficam nos dados do próprio usuário (user_metadata), junto do aceite dos termos: não precisa de tabela nova.
+    const SETTING_KEYS = ['saldo_inicial'];
+    async function settingsOf() {
+      const { data } = await client.auth.getSession();
+      const meta = (data && data.session && data.session.user && data.session.user.user_metadata) || {};
+      const out = {};
+      for (const k of SETTING_KEYS) if (meta[k] != null) out[k] = meta[k];
+      return out;
+    }
+
     return {
       mode: 'supabase',
       async init() {
@@ -161,7 +180,7 @@
           fetchAll('recurring', ['created_at', 'id']),
           fetchAll('transactions', ['date', 'id']),
         ]);
-        return { cards, categories, recurring: recurring.map(numeric), transactions: transactions.map(numeric) };
+        return { cards, categories, recurring: recurring.map(numeric), transactions: transactions.map(numeric), settings: await settingsOf() };
       },
       async insert(table, rows) {
         if (!rows.length) return rows;
@@ -200,6 +219,12 @@
         for (const t of ['transactions', 'recurring', 'categories', 'cards']) {
           ok(await client.from(t).delete().not('id', 'is', null));
         }
+        ok(await client.auth.updateUser({ data: { saldo_inicial: null } }));
+      },
+      async saveSettings(patch) {
+        const data = {};
+        for (const k of SETTING_KEYS) if (k in patch) data[k] = patch[k] == null ? null : patch[k];
+        ok(await client.auth.updateUser({ data }));
       },
       /** Exclui o login de quem está logado e todos os dados dele (a função do banco apaga em cascata). Depois sai só deste aparelho. */
       async deleteAccount() {

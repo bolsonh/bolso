@@ -370,6 +370,9 @@
    */
   function buildInstallments(o) {
     const parts = splitInstallments(toCents(o.totalAmount), o.n);
+    // dividir a conta: a parte da outra pessoa também é repartida pelas parcelas
+    const splitWho = tagClean(o.splitWith);
+    const splitParts = splitWho && Number(o.splitTotal) > 0 ? splitInstallments(Math.min(toCents(o.totalAmount), toCents(o.splitTotal)), o.n) : null;
     const group = uid();
     const startMonth = monthOf(o.firstDate);
     const day = dayOf(o.firstDate);
@@ -388,6 +391,7 @@
         date, month, category: o.category || null, card_id: o.card_id || null, source,
         paid, skipped: false,
         recurring_id: null, group_id: group, installment_no: i + 1, installments_total: o.n, tag: tagClean(o.tag) || null,
+        split_with: splitParts && splitParts[i] > 0 ? splitWho : null, split_share: splitParts && splitParts[i] > 0 ? splitParts[i] / 100 : null, split_paid: splitParts && splitParts[i] > 0 ? false : null,
       };
     });
   }
@@ -476,8 +480,69 @@
     return name;
   }
 
-  /** O valor do gasto que conta para a pessoa, em centavos. Hoje é o valor todo. */
-  function ownCents(t) { return toCents(t.amount); }
+  /* ---------- Dividir a conta com outra pessoa ---------- */
+
+  /** Gasto dividido: tem o nome da outra pessoa e uma parte dela maior que zero. */
+  const hasSplit = (t) => t.kind === 'despesa' && !!tagClean(t.split_with) && Number(t.split_share) > 0;
+
+  /** Quanto fica para a outra pessoa, em centavos. mode: 'half' (meio a meio), 'other' (um valor) ou 'all' (ela paga tudo). */
+  function splitShareCents(totalCents, mode, otherCents) {
+    if (mode === 'all') return totalCents;
+    if (mode === 'other') return Math.max(0, Math.min(totalCents, Math.round(Number(otherCents) || 0)));
+    return Math.floor(totalCents / 2);
+  }
+
+  /** A parte da outra pessoa neste gasto, em centavos (0 se não é dividido). */
+  function othersCents(t) { return hasSplit(t) ? Math.min(toCents(t.amount), toCents(t.split_share)) : 0; }
+
+  /** O valor do gasto que conta para a pessoa, em centavos: o valor todo menos a parte da outra pessoa. */
+  function ownCents(t) { return toCents(t.amount) - othersCents(t); }
+
+  /** Se já existe uma pessoa com esse nome (ignorando maiúscula e acento), usa a grafia que já existe. */
+  function personResolve(txs, text) {
+    const name = tagClean(text);
+    if (!name) return '';
+    const k = tagKey(name);
+    for (let i = txs.length - 1; i >= 0; i--) {
+      const t = txs[i];
+      if (t.split_with && tagKey(t.split_with) === k) return tagClean(t.split_with);
+    }
+    return name;
+  }
+
+  /** Pessoas com quem já dividiu conta, da mais recente para a mais antiga: [{ key, name }]. */
+  function personList(txs) {
+    const seen = new Map();
+    for (const t of txs) {
+      if (!hasSplit(t)) continue;
+      const k = tagKey(t.split_with);
+      const e = seen.get(k);
+      if (!e || t.date >= e.date) seen.set(k, { key: k, name: tagClean(t.split_with), date: t.date });
+    }
+    return [...seen.values()].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.name < b.name ? -1 : 1));
+  }
+
+  /**
+   * O que as outras pessoas ainda devem, por pessoa: [{ key, name, cents, items }].
+   * items são os gastos (do mais antigo ao mais novo) com a parte não devolvida. Gasto pulado não conta.
+   */
+  function receivables(txs) {
+    const map = new Map();
+    for (const t of txs) {
+      if (t.skipped || !hasSplit(t) || t.split_paid) continue;
+      const k = tagKey(t.split_with);
+      let e = map.get(k);
+      if (!e) { e = { key: k, name: tagClean(t.split_with), cents: 0, items: [], last: t.date }; map.set(k, e); }
+      e.cents += othersCents(t);
+      e.items.push(t);
+      if (t.date >= e.last) { e.last = t.date; e.name = tagClean(t.split_with); }
+    }
+    for (const e of map.values()) e.items.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id < b.id ? -1 : 1));
+    return [...map.values()].sort((a, b) => b.cents - a.cents || (a.name < b.name ? -1 : 1));
+  }
+
+  /** Quanto das despesas é das outras pessoas (contas divididas), em centavos. */
+  const othersTotal = (list) => list.reduce((s, t) => s + (t.skipped ? 0 : othersCents(t)), 0);
 
   /**
    * Todas as etiquetas em uso, da mais recente para a mais antiga.
@@ -591,11 +656,11 @@
     };
   }
 
-  function rankBy(list, keyFn) {
+  function rankBy(list, keyFn, valueFn) {
     const m = new Map();
     let total = 0;
     for (const t of list) {
-      const c = toCents(t.amount);
+      const c = valueFn ? valueFn(t) : toCents(t.amount);
       const k = keyFn(t);
       m.set(k, (m.get(k) || 0) + c);
       total += c;
@@ -607,7 +672,8 @@
 
   const expensesIn = (txs, monthSet) => txs.filter((t) => !t.skipped && t.kind === 'despesa' && monthSet.has(t.month));
 
-  const byCategory = (txs, months) => rankBy(expensesIn(txs, new Set(months)), (t) => t.category || 'outros');
+  // por nicho conta só a sua parte (a outra pessoa devolve o resto); por cartão conta o que saiu de fato
+  const byCategory = (txs, months) => rankBy(expensesIn(txs, new Set(months)), (t) => t.category || 'outros', ownCents);
   const byCard = (txs, months) => rankBy(expensesIn(txs, new Set(months)), (t) => t.card_id || '_dinheiro');
 
   function monthlySeries(txs, endMonth, n) {
@@ -796,7 +862,7 @@
     if (!exp.length) return out;
 
     const total = exp.reduce((s, t) => s + toCents(t.amount), 0) / 100;
-    const cats = rankBy(exp, (t) => t.category || 'outros');
+    const cats = rankBy(exp, (t) => t.category || 'outros', ownCents);
     const top = cats.rows[0];
     out.push({ tone: 'info', text: catName(top.key) + ' é onde mais saiu dinheiro: ' + pctText(top.pct) + ' das despesas (' + fmtBRL(top.total) + ').' });
 
@@ -878,7 +944,7 @@
 
   function toCSV(txs, o) {
     const q = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
-    const head = ['Data', 'Mês', 'Tipo', 'Descrição', 'Valor', 'Nicho', 'Cartão', 'Fonte', 'Situação', 'Fixa', 'Parcela', 'Etiqueta'];
+    const head = ['Data', 'Mês', 'Tipo', 'Descrição', 'Valor', 'Nicho', 'Cartão', 'Fonte', 'Situação', 'Fixa', 'Parcela', 'Etiqueta', 'Dividido com', 'Parte da outra pessoa', 'Devolução'];
     const srcName = (k) => (SOURCES.find((s) => s.key === k) || { name: k }).name;
     const rows = txs.slice().sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)).map((t) => [
       t.date, t.month, t.kind === 'receita' ? 'Entrada' : 'Saída', t.description,
@@ -888,18 +954,19 @@
       t.recurring_id ? 'Sim' : 'Não',
       t.installments_total ? t.installment_no + '/' + t.installments_total : '',
       t.tag || '',
+      hasSplit(t) ? tagClean(t.split_with) : '', hasSplit(t) ? fmtNum(t.split_share) : '', hasSplit(t) ? (t.split_paid ? 'Recebida' : 'A receber') : '',
     ].map(q).join(';'));
     return '﻿' + [head.map(q).join(';')].concat(rows).join('\r\n');
   }
 
-  const TERMS_VERSION = '2026-11-06'; // troque ao mudar a política ou os termos: todo mundo aceita de novo
+  const TERMS_VERSION = '2026-11-08'; // troque ao mudar a política ou os termos: todo mundo aceita de novo
 
   const Fin = {
     CATEGORIES, SOURCES, CASH_NAME, TERMS_VERSION,
     toCents, parseMoney, fmtBRL, fmtNum, fmtCompact, splitInstallments,
     pad, todayStr, monthOf, dayOf, addMonths, monthDiff, daysInMonth, dateIn, rangeMonths,
     monthLabel, monthName, monthShort, dayLabel, uid,
-    categoryInfo, descKey, guessCategory, instanceOf, missingRecurring, buildInstallments, installmentFromText, installmentPlans, installmentMonths, tagClean, tagKey, tagResolve, tagList, tagDetail, ownCents, openingOf, carryOver,
+    categoryInfo, descKey, guessCategory, instanceOf, missingRecurring, buildInstallments, installmentFromText, installmentPlans, installmentMonths, tagClean, tagKey, tagResolve, tagList, tagDetail, ownCents, othersCents, othersTotal, hasSplit, splitShareCents, personResolve, personList, receivables, openingOf, carryOver,
     isBilled, invoiceOf, invoiceDates, placeOnInvoice, invoices, incomeOptions, suggestPaySource, incomeForDate, chargeDate, dayInt,
     cycleOf, cycleDates, payDate, cycleView, cycleStatus, incomeSummary, dayNumber, stampDate, lateEntries,
     live, summarize, rankBy, byCategory, byCard, monthlySeries, spendingWhen, dowOf, buildInsights, toCSV,

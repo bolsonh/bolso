@@ -458,3 +458,31 @@ a.list-item { text-decoration: none; color: inherit; }
 .tag-h2 { margin: 22px 2px 10px; }
 .tag-chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } /* nome longo vira uma linha só, em vez de quebrar letra por letra */
 .tag-chip .ic { flex: none; }
+
+/* Dividir conta com outra pessoa: pedidos, avisos e "A receber" */
+.req-list { list-style: none; padding: 0; margin: 0; }
+.req { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.req:first-child { padding-top: 4px; }
+.req:last-child { border-bottom: 0; padding-bottom: 0; }
+.req-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.req-desc { min-width: 0; overflow-wrap: anywhere; }
+.req-amt { flex: none; }
+.req-meta { margin: 4px 0 10px; font-size: 14px; color: var(--ink2); overflow-wrap: anywhere; }
+.req-changed { display: flex; align-items: center; gap: 6px; margin: -2px 0 10px; font-size: 13px; font-weight: 600; color: var(--warn); }
+.req-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.recv + .recv { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.recv-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 2px; }
+.recv-head b:first-child { min-width: 0; overflow-wrap: anywhere; }
+.recv-items { list-style: none; padding: 0; margin: 0 0 8px; }
+.recv-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "main amt" "btn btn"; column-gap: 12px; align-items: start; padding: 8px 0; border-top: 1px solid var(--line); }
+.recv-item:first-child { border-top: 0; }
+.recv-main { grid-area: main; display: grid; gap: 1px; min-width: 0; cursor: pointer; padding: 4px 0; }
+.recv-item .due-amt { grid-area: amt; padding-top: 4px; }
+.recv-item .btn { grid-area: btn; justify-self: end; margin-top: 4px; }
+.due-when.ok { color: var(--good); font-weight: 600; }
+.share-sum { margin: 0 0 16px; }
+
+/* situação da parte da outra pessoa: o texto diz quem e quanto, então quebra em duas linhas em vez de ser cortado */
+.split-chip { align-items: flex-start; border-radius: 14px; padding-top: 2px; padding-bottom: 2px; }
+.split-chip > svg { flex: none; margin-top: 4px; }
+.split-chip > span { min-width: 0; overflow-wrap: break-word; }

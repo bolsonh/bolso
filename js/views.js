@@ -27,6 +27,7 @@
     user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/>',
     phone: '<rect x="7" y="3" width="10" height="18" rx="2.5"/><path d="M11 18h2"/>',
     chev: '<path d="m9 6 6 6-6 6"/>',
+    layers: '<path d="M12 3 3 8l9 5 9-5z"/><path d="m3 13 9 5 9-5"/>',
   };
   const icon = (n, cls) => '<svg class="ic ' + (cls || '') + '" viewBox="0 0 24 24" aria-hidden="true">' + ICON[n] + '</svg>';
   B.icon = icon;
@@ -187,7 +188,16 @@
     html += '<section><div class="sec-head"><h2>Para onde foi</h2>' + (cats.rows.length ? '<button type="button" class="link-btn" data-act="go" data-to="analises">Análise completa</button>' : '') + '</div>';
     if (!cats.rows.length) html += '<p class="empty-line">Sem despesas neste mês.</p>';
     else html += C.ranked(cats.rows.slice(0, 5).map((r) => ({ label: B.catName(r.key), lead: '<span class="ico sm">' + B.cat(r.key).emoji + '</span>', value: r.total, pctText: Math.round(r.pct * 100) + '%' })));
-    html += '</section></div></div>';
+    html += '</section>';
+
+    // Parcelas em andamento (todas as compras parceladas, de todos os cartões)
+    const open = F.installmentPlans(T).filter((p) => !p.done);
+    if (open.length) {
+      html += '<section><div class="sec-head"><h2>Parcelas em andamento</h2><button type="button" class="link-btn" data-act="go" data-to="mais/parcelas">Ver todas</button></div>' +
+        '<p class="muted-text">' + plural(open.length, 'compra parcelada', 'compras parceladas') + '. Falta pagar ' + brl(open.reduce((s, p) => s + p.remainingAmount, 0)) +
+        ', tudo quitado em ' + mlabel(open.reduce((m, p) => (p.lastMonth > m ? p.lastMonth : m), '')) + '.</p></section>';
+    }
+    html += '</div></div>';
     return html;
   };
 
@@ -478,11 +488,20 @@
     return '<header class="head sub"><button type="button" class="icon-btn" data-act="go" data-to="mais" aria-label="Voltar">' + icon('left') + '</button><h1>' + title + '</h1>' + (right || '') + '</header>';
   }
 
+  const brlN = (v) => brl(v).replace(' ', '\u00a0'); // sem quebrar entre R$ e o número
+  const mlabel = (m) => F.monthShort(m) + '/' + m.slice(0, 4);
+  const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many);
+  function parcelasSub() {
+    const open = F.installmentPlans(S.data.transactions).filter((p) => !p.done);
+    return open.length ? plural(open.length, 'compra em andamento', 'compras em andamento') + ', falta ' + brl(open.reduce((s, p) => s + p.remainingAmount, 0)) : 'Compras parceladas de todos os cartões';
+  }
+
   V.mais = function () {
     const local = S.store.mode === 'local';
     const item = (to, ic, title, sub) => '<button type="button" class="list-item" data-act="go" data-to="' + to + '"><span class="ico">' + icon(ic) + '</span><span class="li-text"><b>' + title + '</b><small>' + sub + '</small></span>' + icon('chev', 'end') + '</button>';
     let html = '<header class="head"><div class="head-title"><h1>Mais</h1></div></header>';
     html += '<div class="list">' +
+      item('mais/parcelas', 'layers', 'Parcelas', parcelasSub()) +
       item('mais/fixas', 'repeat', 'Contas fixas', S.data.recurring.filter((r) => r.active).length + ' ativas, voltam todo mês') +
       item('mais/cartoes', 'card', 'Cartões', S.data.cards.length ? S.data.cards.length + (S.data.cards.length === 1 ? ' cartão' : ' cartões') : 'Cadastre os cartões que você usa') +
       item('mais/nichos', 'tag', 'Nichos', F.CATEGORIES.length + ' padrão' + (S.data.categories.length ? ' e ' + S.data.categories.length + ' seus' : '')) +
@@ -536,6 +555,52 @@
     return html;
   };
 
+  /** Todas as compras parceladas, de todos os cartões juntos: quanto falta, quando termina e quanto cai em cada mês. */
+  V.parcelas = function () {
+    const cur = B.curMonth();
+    const par = S.par || (S.par = { card: '' });
+    const all = F.installmentPlans(S.data.transactions);
+    const open = all.filter((p) => !p.done), done = all.length - open.length;
+    let html = backHead('Parcelas');
+    if (!open.length) {
+      html += '<p class="empty-box">' + (all.length ? 'Todas as suas compras parceladas já foram quitadas.' : 'Nenhuma compra parcelada por enquanto. Quando você lançar uma compra parcelada no cartão de crédito, ela aparece aqui, com todos os cartões juntos.') + '</p>';
+      if (done) html += '<p class="muted-text">' + plural(done, 'compra quitada', 'compras quitadas') + ' não aparece aqui.</p>';
+      return html;
+    }
+    const cardIds = [...new Set(open.map((p) => p.card_id || ''))];
+    if (par.card && !cardIds.includes(par.card)) par.card = '';
+    const list = par.card ? open.filter((p) => (p.card_id || '') === par.card) : open;
+    html += '<p class="muted-text lead">Compras parceladas de todos os cartões, o que falta pagar e quando acaba.</p>';
+    if (cardIds.length > 1) {
+      html += '<div class="opts row par-filter" role="group" aria-label="Filtrar por cartão"><button type="button" class="opt" aria-pressed="' + (!par.card) + '" data-act="set-par-card" data-v="">Todos</button>' +
+        cardIds.map((id) => { const c = B.card(id); return '<button type="button" class="opt" aria-pressed="' + (par.card === id) + '" data-act="set-par-card" data-v="' + esc(id) + '"><i class="dot" style="--c:' + esc(c ? c.color : 'var(--muted)') + '"></i>' + esc(B.cardName(id)) + '</button>'; }).join('') + '</div>';
+    }
+    const left = list.reduce((s, p) => s + p.remainingAmount, 0);
+    const ends = list.reduce((m, p) => (p.lastMonth > m ? p.lastMonth : m), '');
+    html += '<dl class="trio par-sum"><div><dt>Falta pagar</dt><dd class="num">' + brl(left) + '</dd></div>' +
+      '<div><dt>Compras</dt><dd class="num">' + list.length + '</dd></div>' +
+      '<div><dt>Tudo quitado em</dt><dd>' + mlabel(ends) + '</dd></div></dl>';
+
+    const tl = F.installmentMonths(list, cur, 12);
+    html += '<section><h2>Quanto cai em cada mês</h2>' + C.columns(tl.series, cur, 'Parcelas');
+    if (tl.later.count) html += '<p class="muted-text">Depois de ' + mlabel(tl.series[tl.series.length - 1].month) + ' ainda há ' + plural(tl.later.count, 'parcela', 'parcelas') + ', somando ' + brlN(tl.later.amount) + '.</p>';
+    html += '</section>';
+
+    html += '<section><h2>Suas compras parceladas</h2><ul class="plans">' + list.map((p) => {
+      const card = B.card(p.card_id);
+      const starts = p.paidNo === 0 && p.nextMonth > cur;
+      const where = (B.isBilledTx(p.next) ? 'na fatura de ' : 'em ') + mlabel(p.nextMonth);
+      const pct = Math.round((p.paidNo / p.n) * 100);
+      return '<li class="plan"><div class="plan-top"><span class="ico sm">' + esc(B.cat(p.category || 'outros').emoji) + '</span><b class="plan-name">' + esc(p.description) + '</b><b class="num">' + brl(p.nextAmount) + '</b></div>' +
+        '<p class="plan-sub"><span class="plan-card"><i class="dot" style="--c:' + esc(card ? card.color : 'var(--muted)') + '"></i>' + esc(B.cardName(p.card_id)) + '</span> ' +
+        (starts ? 'Começa ' + where : 'Parcela <b>' + p.nextNo + ' de ' + p.n + '</b>, ' + where) + '</p>' +
+        '<div class="rank-bar" role="img" aria-label="' + p.paidNo + ' de ' + p.n + ' parcelas pagas"><i style="width:' + pct + '%"></i></div>' +
+        '<p class="plan-foot">' + (p.remaining === 1 ? 'Falta 1 parcela' : 'Faltam ' + p.remaining + ' parcelas') + ', ' + brlN(p.remainingAmount) + '. Termina em ' + mlabel(p.lastMonth) + '.</p></li>';
+    }).join('') + '</ul></section>';
+    if (done) html += '<p class="muted-text">' + plural(done, 'compra já quitada não aparece', 'compras já quitadas não aparecem') + ' aqui.</p>';
+    return html;
+  };
+
   V.nichos = function () {
     let html = backHead('Nichos', '<button type="button" class="btn small primary" data-act="new-cat">' + icon('plus', 'xs') + 'Novo</button>');
     html += '<p class="muted-text lead">Nichos são os tipos de gasto. Os padrões já cobrem o que a maioria das pessoas mais gasta; crie os seus se precisar.</p>';
@@ -582,7 +647,7 @@
   B.parseHash = function () {
     const parts = (root.location.hash || '').replace(/^#\/?/, '').split('/');
     const r = NAV.some(([id]) => id === parts[0]) ? parts[0] : 'resumo';
-    const sub = r === 'mais' && ['fixas', 'cartoes', 'nichos', 'dados'].includes(parts[1]) ? parts[1] : '';
+    const sub = r === 'mais' && ['parcelas', 'fixas', 'cartoes', 'nichos', 'dados'].includes(parts[1]) ? parts[1] : '';
     return { r, sub };
   };
 
@@ -608,6 +673,7 @@
     if (el.dataset.status) S.f.status = el.dataset.status;
     B.go(el.dataset.to);
   };
+  A['set-par-card'] = (el) => { S.par = { card: el.dataset.v === (S.par || {}).card ? '' : el.dataset.v }; B.render(); };
   A['set-kind-filter'] = (el) => { S.f.kind = el.dataset.v; B.render(); };
   A['set-range'] = (el) => { S.ana.range = +el.dataset.v; B.render(); };
   A['set-ana-by'] = (el) => { S.ana.by = el.dataset.v === 'calendario' ? 'calendario' : 'renda'; B.render(); };

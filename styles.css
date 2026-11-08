@@ -234,6 +234,20 @@ section > h2, .sec-head h2 { margin-bottom: 10px; }
 .rank-bar { height: 8px; margin-top: 7px; }
 .rank-bar i { display: block; height: 100%; min-width: 2px; border-radius: 0 4px 4px 0; background: var(--muted); }
 .rank-bar i.top { background: var(--ink); }
+
+/* Parcelas: compras parceladas de todos os cartões */
+.par-filter { margin-bottom: 14px; }
+.par-sum { margin: 4px 0 22px; }
+.plans { list-style: none; margin: 0; padding: 0; }
+.plan { padding: 14px 0; border-bottom: 1px solid var(--line); }
+.plan-top { display: flex; align-items: center; gap: 10px; }
+.plan-name { flex: 1; min-width: 0; font-size: 16px; overflow-wrap: anywhere; }
+.plan-sub { margin: 6px 0 0 40px; font-size: 14px; color: var(--ink2); }
+.plan-card { display: inline-flex; align-items: center; gap: 5px; margin-right: 4px; font-weight: 600; color: var(--ink); }
+.plan .rank-bar { margin: 8px 0 0 40px; border-radius: 4px; background: color-mix(in srgb, var(--ink) 8%, var(--bg)); }
+.plan .rank-bar i { background: var(--ink); }
+.plan-foot { margin: 6px 0 0 40px; font-size: 13px; color: var(--ink2); }
+.plan:last-child { border-bottom: 0; }
 .ico { display: grid; place-items: center; flex: none; width: 40px; height: 40px; border-radius: 12px; font-size: 20px; line-height: 1; background: color-mix(in srgb, var(--ink) 6%, var(--bg)); }
 .ico .ic { width: 20px; height: 20px; }
 .ico.sm { width: 30px; height: 30px; border-radius: 9px; font-size: 16px; }
@@ -254,8 +268,9 @@ section > h2, .sec-head h2 { margin-bottom: 10px; }
   padding: 6px 10px; border-radius: 8px; background: var(--ink); color: var(--bg); font-size: 12px; white-space: nowrap;
   opacity: 0; pointer-events: none; z-index: 2;
 }
-.col:first-child::after { left: 0; transform: none; }
-.col:last-child::after { left: auto; right: 0; transform: none; }
+/* a dica de cada coluna não pode passar da borda: as 3 primeiras abrem para a direita e as 3 últimas para a esquerda */
+.col:nth-child(-n+3)::after { left: 0; transform: none; }
+.col:nth-last-child(-n+3)::after { left: auto; right: 0; transform: none; }
 .col:hover::after, .col:focus::after { opacity: 1; }
 .cols-x { margin-left: 42px; }
 .cols-x-in { display: grid; grid-template-columns: repeat(var(--n), 1fr); margin-top: 6px; text-align: center; font-size: 11px; color: var(--ink2); }

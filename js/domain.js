@@ -139,6 +139,60 @@
     return CATEGORIES[CATEGORIES.length - 1];
   }
 
+  /* ---------- Nicho sugerido pela descrição ---------- */
+
+  const keyCache = new Map();
+  /**
+   * Texto para comparar descrições: sem maiúscula, acento, pontuação, "3/10" de parcela
+   * e números soltos (comprovante, pedido). "99" sozinho no começo é nome de app e fica.
+   */
+  function descKey(s) {
+    const raw = String(s || '');
+    if (keyCache.has(raw)) return keyCache.get(raw);
+    const words = raw.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/\b\d{1,2}\s*\/\s*\d{1,2}\b/g, ' ')
+      .replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(Boolean);
+    const key = words.filter((w, i) => !/^\d+$/.test(w) || (i === 0 && w.length <= 2)).join(' ');
+    if (keyCache.size > 3000) keyCache.clear();
+    keyCache.set(raw, key);
+    return key;
+  }
+
+  /** Uma descrição começa com a outra, palavra por palavra ("uber" e "uber trip"). */
+  const startsWithWords = (long, short) => long === short || long.startsWith(short + ' ');
+
+  /**
+   * Nicho que a pessoa usou antes para uma descrição igual ou parecida.
+   * Igual (ignorando maiúscula, acento e números): vale o mais recente.
+   * Parecida (uma começa com a outra): só sugere se todos os parecidos usam o mesmo nicho.
+   * Devolve { category, from } com a descrição de onde veio, ou null.
+   */
+  function guessCategory(txs, description, validKeys) {
+    const key = descKey(description);
+    if (key.length < 2) return null;
+    const rows = [];
+    for (const t of txs) {
+      if (t.kind !== 'despesa' || t.skipped || !t.category) continue;
+      if (validKeys && !validKeys.has(t.category)) continue;
+      const k = descKey(t.description);
+      if (k) rows.push({ t, k });
+    }
+    const latest = (list) => list.reduce((a, b) => (b.t.date >= a.t.date ? b : a));
+    const same = rows.filter((r) => r.k === key);
+    if (same.length) { const r = latest(same); return { category: r.t.category, from: r.t.description }; }
+    if (key.length < 3 && !/^\d+$/.test(key)) return null; // curto demais para dizer que é parecido
+    let kin = [], best = 0;
+    for (const r of rows) {
+      const [s, l] = r.k.length <= key.length ? [r.k, key] : [key, r.k]; // s é a mais curta
+      if (!startsWithWords(l, s) || !(s.length >= 3 || /^\d+$/.test(s))) continue;
+      if (s.length > best) { best = s.length; kin = []; } // o parecido mais específico vence ("uber eats" antes de "uber")
+      if (s.length === best) kin.push(r);
+    }
+    if (!kin.length || new Set(kin.map((r) => r.t.category)).size !== 1) return null;
+    const r = latest(kin);
+    return { category: r.t.category, from: r.t.description };
+  }
+
   /* ---------- Cartão de crédito: fechamento, vencimento e fatura ---------- */
 
   const dayInt = (v) => { const n = Number(v); return Number.isInteger(n) && n >= 1 && n <= 31 ? n : 0; };
@@ -674,7 +728,7 @@
     toCents, parseMoney, fmtBRL, fmtNum, fmtCompact, splitInstallments,
     pad, todayStr, monthOf, dayOf, addMonths, monthDiff, daysInMonth, dateIn, rangeMonths,
     monthLabel, monthName, monthShort, dayLabel, uid,
-    categoryInfo, instanceOf, missingRecurring, buildInstallments,
+    categoryInfo, descKey, guessCategory, instanceOf, missingRecurring, buildInstallments,
     isBilled, invoiceOf, invoiceDates, placeOnInvoice, invoices, incomeOptions, suggestPaySource, incomeForDate, chargeDate, dayInt,
     cycleOf, cycleDates, payDate, cycleView, cycleStatus, incomeSummary, dayNumber, stampDate, lateEntries,
     live, summarize, rankBy, byCategory, byCard, monthlySeries, spendingWhen, dowOf, buildInsights, toCSV,
